@@ -11,6 +11,7 @@ The player controls a ghost character (rendered from `ghosty.png`) that navigate
 - Fixed logical resolution (480×640) with CSS scaling to fill the viewport while preserving aspect ratio
 - `requestAnimationFrame` game loop with delta-time scaling for frame-rate independence
 - All game state managed in a single `GameState` object passed through the update/render pipeline
+- Centralized `CONFIG` object for all tunable parameters with URL query parameter overrides for rapid playtesting
 - Web Audio API for low-latency sound effects; `HTMLAudioElement` fallback for background music
 - `localStorage` for high score persistence with graceful degradation
 
@@ -195,7 +196,7 @@ if state == Playing:
 
 ### 5. ScrollingEngine
 
-Manages horizontal movement of pipes, collectibles, and clouds.
+Manages horizontal movement of pipes, collectibles, and clouds. Uses object pooling for memory efficiency.
 
 ```javascript
 // ScrollingEngine interface
@@ -214,10 +215,11 @@ Manages horizontal movement of pipes, collectibles, and clouds.
 - Spawns collectibles between pipe pairs with probability check
 - Manages cloud recycling across parallax layers
 - Clouds continue scrolling in Ready and GameOver states (Req 9.6)
+- Returns deactivated objects to their respective pools instead of discarding them
 
 ### 6. CollisionDetector
 
-Performs axis-aligned bounding box (AABB) collision checks.
+Uses a hybrid collision model: the Ghost is represented as a circle (matching its round sprite shape) while pipes use axis-aligned rectangles. This provides more accurate and forgiving detection than pure AABB for a round character.
 
 ```javascript
 // CollisionDetector interface
@@ -233,7 +235,34 @@ Performs axis-aligned bounding box (AABB) collision checks.
 }
 ```
 
-**Algorithm:** Simple AABB overlap — no rotation, no pixel-perfect detection needed for this game style. The ghost hitbox is slightly smaller than the sprite (80% size) for forgiving gameplay feel.
+**Ghost Hitbox — Circle:**
+- Center: `(ghost.x + ghost.width / 2, ghost.y + ghost.height / 2)`
+- Radius: `min(ghost.width, ghost.height) / 2 * ghost.hitboxScale`
+- The hitboxScale (0.8) makes the circle smaller than the sprite for forgiving feel
+
+**Pipe Hitbox — Axis-Aligned Rectangle:**
+- Top pipe rect: `{ x: pipe.x, y: 0, width: pipe.width, height: gapCenterY - gapHeight/2 }`
+- Bottom pipe rect: `{ x: pipe.x, y: gapCenterY + gapHeight/2, width: pipe.width, height: canvasHeight - (gapCenterY + gapHeight/2) }`
+
+**Circle-vs-Rectangle Algorithm:**
+```
+function circleRectCollision(cx, cy, radius, rx, ry, rw, rh):
+    // Find the closest point on the rectangle to the circle center
+    closestX = clamp(cx, rx, rx + rw)
+    closestY = clamp(cy, ry, ry + rh)
+    
+    // Calculate distance from circle center to closest point
+    dx = cx - closestX
+    dy = cy - closestY
+    
+    return (dx * dx + dy * dy) <= (radius * radius)
+```
+
+**Boundary Detection:**
+- Floor collision: `ghostCenterY + radius >= canvasHeight - hudHeight`
+- Ceiling collision: `ghostCenterY - radius <= 0`
+
+**Early-Exit Optimization:** Before running circle-rect math, perform a broad-phase AABB check. Only compute the precise circle-rect test if the ghost's bounding box overlaps the pipe's bounding box. This avoids sqrt/distance calculations for distant pipes.
 
 ### 7. DifficultyManager
 
@@ -362,7 +391,7 @@ const gameState = {
     width: 40,       // Sprite render width
     height: 40,      // Sprite render height
     velocity: 0,     // Vertical velocity (positive = down)
-    hitboxScale: 0.8 // Hitbox is 80% of render size for forgiving feel
+    hitboxScale: 0.8 // Circle radius = min(width, height) / 2 * hitboxScale
   },
 
   // Pipes
@@ -480,46 +509,154 @@ const gameState = {
 }
 ```
 
-### DifficultyParams
+### Centralized CONFIG Object
+
+All tunable game parameters are grouped in a single `CONFIG` object at the top of the script. This serves as the single source of truth for all constants, making it easy to find and adjust any game parameter in one place.
 
 ```javascript
-// Constants
-const DIFFICULTY = {
-  BASE_SPEED: 3,
-  SPEED_INCREMENT: 0.2,
-  MAX_SPEED: 7,
-  BASE_GAP: 140,
-  GAP_DECREMENT: 3,
-  MIN_GAP: 90,
-  BASE_SPACING: 250,
-  SPACING_DECREMENT: 7,
-  MIN_SPACING: 165,
-  SCORE_TIER_SIZE: 10
+const CONFIG = {
+  canvas: {
+    width: 480,
+    height: 640,
+    hudHeight: 40,
+    targetFps: 60,
+    maxDt: 33  // ms, prevents spiral-of-death
+  },
+  physics: {
+    gravity: 0.5,
+    jumpVelocity: -7,
+    terminalVelocityDown: 10,
+    terminalVelocityUp: -9
+  },
+  difficulty: {
+    baseSpeed: 3,
+    speedIncrement: 0.2,
+    maxSpeed: 7,
+    baseGap: 140,
+    gapDecrement: 3,
+    minGap: 90,
+    baseSpacing: 250,
+    spacingDecrement: 7,
+    minSpacing: 165,
+    scoreTierSize: 10
+  },
+  ghost: {
+    width: 40,
+    height: 40,
+    hitboxScale: 0.8,
+    startX: 160,
+    startY: 320
+  },
+  pipes: {
+    width: 60,
+    gapMinPercent: 0.2,
+    gapMaxPercent: 0.8,
+    fillColor: '#2ecc40',
+    outlineColor: '#1a7a28',
+    outlineWidth: 2
+  },
+  collectibles: {
+    width: 30,
+    height: 20,
+    spawnProbabilityMin: 0.3,
+    spawnProbabilityMax: 0.5,
+    speedFactorMin: 0.5,
+    speedFactorMax: 1.5,
+    opacityMin: 0.4,
+    opacityMax: 0.7,
+    bonusPoints: 5
+  },
+  clouds: {
+    layers: [
+      { speedFactor: [0.1, 0.3], opacity: [0.1, 0.3], scale: [0.2, 0.4] },  // far
+      { speedFactor: [0.4, 0.6], opacity: [0.3, 0.5], scale: [0.5, 0.7] },  // mid
+      { speedFactor: [0.7, 0.9], opacity: [0.5, 0.7], scale: [0.8, 1.0] }   // near
+    ],
+    countPerLayer: [2, 5],
+    baseWidth: [60, 120]
+  },
+  particles: {
+    trailRateMin: 3,
+    trailRateMax: 8,
+    burstCountMin: 5,
+    burstCountMax: 10,
+    radiusMin: 2,
+    radiusMax: 5,
+    opacityMin: 0.3,
+    opacityMax: 0.6,
+    lifespanMin: 200,
+    lifespanMax: 500
+  },
+  shake: {
+    intensity: 3,
+    durationMin: 200,
+    durationMax: 400
+  },
+  scorePopup: {
+    lifespanMin: 500,
+    lifespanMax: 1000
+  },
+  audio: {
+    musicVolume: 0.3
+  },
+  pools: {
+    pipes: 8,
+    collectibles: 6,
+    particles: 100,
+    scorePopups: 5,
+    clouds: 15
+  }
 };
 ```
 
-### Physics Constants
+### URL Parameter Overrides
 
-```javascript
-const PHYSICS = {
-  GRAVITY: 0.5,
-  JUMP_VELOCITY: -7,
-  TERMINAL_VELOCITY_DOWN: 10,
-  TERMINAL_VELOCITY_UP: -9
-};
+On page load, the game parses `window.location.search` and overrides any matching CONFIG values using dot-notation keys. This allows rapid playtesting without editing source code.
+
+**Usage Examples:**
+```
+index.html?physics.gravity=0.3&physics.jumpVelocity=-9&difficulty.baseSpeed=4
+index.html?ghost.width=50&ghost.height=50&pipes.width=70
+index.html?difficulty.maxSpeed=10&difficulty.minGap=60
 ```
 
-### Canvas/Layout Constants
-
+**Implementation:**
 ```javascript
-const CANVAS = {
-  WIDTH: 480,
-  HEIGHT: 640,
-  HUD_HEIGHT: 40,
-  TARGET_FPS: 60,
-  MAX_DT: 33  // ms, prevents spiral-of-death
-};
+function applyUrlOverrides(config) {
+  const params = new URLSearchParams(window.location.search);
+  for (const [key, value] of params) {
+    const parts = key.split('.');
+    let target = config;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (target[parts[i]] !== undefined) {
+        target = target[parts[i]];
+      } else {
+        target = null;
+        break;
+      }
+    }
+    if (target !== null && target[parts[parts.length - 1]] !== undefined) {
+      const existing = target[parts[parts.length - 1]];
+      // Preserve type: number stays number, array stays array
+      if (typeof existing === 'number') {
+        target[parts[parts.length - 1]] = parseFloat(value);
+      } else if (Array.isArray(existing)) {
+        target[parts[parts.length - 1]] = JSON.parse(value);
+      } else {
+        target[parts[parts.length - 1]] = value;
+      }
+    }
+  }
+  return config;
+}
 ```
+
+**Design Notes:**
+- Only overrides keys that already exist in CONFIG (ignores unknown keys for safety)
+- Preserves types: numeric values are parsed as floats, arrays as JSON
+- Applied once at startup before any subsystem initialization
+- Zero runtime cost after initialization — CONFIG is read-only during gameplay
+- Bookmarkable: different tuning profiles can be saved as browser bookmarks
 
 
 
@@ -592,9 +729,9 @@ And all three values SHALL remain within their defined bounds.
 
 **Validates: Requirements 3.4, 6.5**
 
-### Property 11: AABB collision detection correctness
+### Property 11: Circle-vs-Rectangle collision detection correctness
 
-*For any* ghost bounding box and pipe bounding box that overlap (ghost_right > pipe_left AND ghost_left < pipe_right AND ghost_bottom > pipe_top AND ghost_top < pipe_bottom), the collision detector SHALL return collided=true. *For any* ghost bounding box that extends beyond the canvas top (ghost.y < 0) or below the HUD top edge, the collision detector SHALL return collided=true.
+*For any* ghost circle (center cx, cy and radius r) and pipe rectangle (rx, ry, rw, rh), the collision detector SHALL return collided=true if and only if the distance from the circle center to the nearest point on the rectangle is less than or equal to the radius. Specifically: `(clamp(cx, rx, rx+rw) - cx)² + (clamp(cy, ry, ry+rh) - cy)² <= r²`. *For any* ghost circle where `cy - r <= 0` (ceiling) or `cy + r >= canvasHeight - hudHeight` (floor), the collision detector SHALL return collided=true.
 
 **Validates: Requirements 4.1, 4.2, 4.3**
 
@@ -654,6 +791,88 @@ And all three values SHALL remain within their defined bounds.
 *For any* cloud position in the Ready or Game_Over state, after a scrolling update with positive delta-time, the cloud's x position SHALL decrease (clouds keep moving for visual interest), while pipe and collectible positions remain unchanged.
 
 **Validates: Requirements 9.6, 7.12**
+
+## Performance Optimization
+
+### Target: 60 FPS
+
+The game targets a consistent 60 frames per second. The following strategies ensure the frame budget (~16.6ms) is met:
+
+### Object Pooling
+
+Instead of creating and garbage-collecting game objects each frame, the engine uses pre-allocated pools for frequently created/destroyed objects:
+
+```javascript
+// ObjectPool interface
+{
+  acquire(): T           // Get an object from the pool (or create if empty)
+  release(obj: T): void  // Return an object to the pool for reuse
+  prewarm(count: number): void  // Pre-allocate objects at startup
+}
+```
+
+**Pooled Object Types:**
+| Object Type | Pool Size (prewarm) | Rationale |
+|---|---|---|
+| PipePair | 8 | Max ~5 visible at once; buffer for spawning ahead |
+| Collectible | 6 | Max ~3 visible; some in transit off-screen |
+| Particle | 100 | High turnover (3-8 spawned per frame, short lifespan) |
+| ScorePopup | 5 | Brief lifespan, low concurrency |
+| Cloud | 15 | 3 layers × 5 max per layer |
+
+**Pool Lifecycle:**
+1. At game init, prewarm each pool to its target size
+2. On spawn: `pool.acquire()` retrieves a deactivated object, resets its properties, and activates it
+3. On deactivation (off-screen, expired, collected): `pool.release(obj)` returns it to the free list
+4. Pool grows dynamically if demand exceeds prewarm size (rare; only on extreme difficulty)
+
+**Memory Benefit:** Eliminates per-frame allocations for game objects, reducing GC pauses that cause frame drops.
+
+### Sprite Batching
+
+The Renderer minimizes Canvas 2D state changes by grouping draw calls:
+
+1. **Batch by fill style:** All pipes share the same green fill — draw all pipe rects in a single `beginPath()` / multiple `rect()` / `fill()` sequence rather than individual `fillRect()` calls
+2. **Batch particles:** All particles share similar styling — set `globalAlpha` once per opacity group and draw circles in batch
+3. **Pre-render static elements:** The HUD background bar and pipe cap decorations are pre-rendered to an offscreen canvas once and stamped via `drawImage()` each frame
+4. **Minimize context state switches:** Group operations that share `fillStyle`, `globalAlpha`, and `font` settings to avoid redundant state changes
+
+```javascript
+// Batch pipe rendering example
+ctx.fillStyle = CONFIG.pipes.fillColor;
+ctx.beginPath();
+for (const pipe of activePipes) {
+  // Top pipe
+  ctx.rect(pipe.x, 0, pipe.width, pipe.gapCenterY - pipe.gapHeight / 2);
+  // Bottom pipe
+  ctx.rect(pipe.x, pipe.gapCenterY + pipe.gapHeight / 2, pipe.width, canvasHeight);
+}
+ctx.fill();
+```
+
+### Additional Optimizations
+
+| Technique | Description |
+|---|---|
+| Broad-phase collision skip | Only check pipes within ghost's x-range (±pipe.width) — skip pipes clearly ahead or behind |
+| Particle hybrid array | Use a flat typed array for particle positions/velocities to improve cache coherence |
+| Cloud recycling | Clouds are never destroyed — repositioned off-right when they exit left |
+| Delta-time clamping | Cap dt at 33ms to prevent large update steps that cascade into more work |
+| Conditional particle rendering | Skip particle draw calls when opacity falls below 0.05 (invisible) |
+| Canvas layer caching | Cache the background + clouds to an offscreen canvas; only redraw when cloud positions change significantly (every ~4 frames) |
+
+### Performance Budget
+
+| Phase | Target Budget |
+|---|---|
+| Input + State | < 0.5ms |
+| Physics | < 0.5ms |
+| Scrolling + Pooling | < 1.0ms |
+| Collision Detection | < 1.0ms |
+| Difficulty + Scoring | < 0.5ms |
+| Particle Update | < 1.0ms |
+| Render | < 8.0ms |
+| **Total** | **< 12.5ms** (leaves 4ms headroom) |
 
 ## Error Handling
 
@@ -730,7 +949,7 @@ Property-based tests validate universal invariants using randomized inputs. The 
 | 8 | Gap center always within 20%-80% bounds | Feature: flappy-kiro, Property 8: Pipe gap center within bounds |
 | 9 | Pipe moves left by speed * dt each frame | Feature: flappy-kiro, Property 9: Pipe movement at correct speed |
 | 10 | Offscreen objects are removed | Feature: flappy-kiro, Property 10: Offscreen object removal |
-| 11 | Overlapping AABBs detected as collision | Feature: flappy-kiro, Property 11: AABB collision detection correctness |
+| 11 | Overlapping circle-rect detected as collision | Feature: flappy-kiro, Property 11: Circle-vs-Rectangle collision detection correctness |
 | 12 | Pipe pass awards exactly 1 point once | Feature: flappy-kiro, Property 12: Pipe pass scoring |
 | 13 | High score = max(current, previous) | Feature: flappy-kiro, Property 13: High score is max |
 | 14 | HUD string format matches spec | Feature: flappy-kiro, Property 14: HUD format string |

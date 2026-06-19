@@ -11,8 +11,11 @@ Implement a retro-styled endless side-scrolling browser game as a single HTML5 p
     - Create HTML file with a 480x640 canvas element
     - Add CSS to scale canvas to fill viewport while maintaining aspect ratio
     - Add embedded `<script>` tag with module structure
-    - Define all game constants (PHYSICS, DIFFICULTY, CANVAS) as per design
-    - Define initial game state object structure with all fields
+    - Define centralized CONFIG object with all tunable parameters grouped by subsystem (canvas, physics, difficulty, ghost, pipes, collectibles, clouds, particles, shake, scorePopup, audio, pools)
+    - Implement applyUrlOverrides() function that parses URL query parameters using dot-notation keys (e.g., `?physics.gravity=0.3&difficulty.baseSpeed=4`) and overrides matching CONFIG values while preserving types
+    - Call applyUrlOverrides(CONFIG) once at startup before any subsystem initialization
+    - Implement ObjectPool class with acquire(), release(), prewarm(count) methods for reusable object management
+    - Define initial game state object structure with all fields referencing CONFIG values
     - _Requirements: 1.1, 1.3, 8.1, 8.3_
 
 - [ ] 2. Implement input handling and state management
@@ -58,10 +61,12 @@ Implement a retro-styled endless side-scrolling browser game as a single HTML5 p
 - [ ] 4. Implement scrolling engine and pipe generation
   - [ ] 4.1 Implement ScrollingEngine module — pipe generation and movement
     - Create ScrollingEngine with update(), spawnPipePair(), removeOffscreen() methods
+    - Initialize pipe pool (prewarm 8 objects) and collectible pool (prewarm 6 objects) at startup
+    - Use pool.acquire() when spawning new pipes/collectibles; pool.release() when deactivating off-screen objects
     - Generate pipe pairs at regular spacing (BASE_SPACING = 250px)
     - Position gap center between 20%-80% of playable area using uniform random
     - Move all pipes left at pipeSpeed * dt each frame in Playing state
-    - Remove pipes when right edge passes x=0
+    - Remove pipes when right edge passes x=0 (return to pool)
     - Do not generate or move pipes in Ready/GameOver states
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 7.12_
 
@@ -88,14 +93,17 @@ Implement a retro-styled endless side-scrolling browser game as a single HTML5 p
 - [ ] 6. Implement collision detection and scoring
   - [ ] 6.1 Implement CollisionDetector module
     - Create CollisionDetector with check() and checkCollectibles() methods
-    - Implement AABB overlap detection between ghost hitbox (80% of sprite size) and pipe bounding boxes
-    - Detect floor collision (ghost bottom > canvas height - HUD height)
-    - Detect ceiling collision (ghost top < 0)
+    - Implement circular hitbox for Ghost: center at (ghost.x + width/2, ghost.y + height/2), radius = min(width, height) / 2 * hitboxScale
+    - Implement rectangular hitbox for pipes: axis-aligned rects for top and bottom segments
+    - Implement circle-vs-rectangle collision: find closest point on rect to circle center, test distance² <= radius²
+    - Add broad-phase AABB pre-check: skip precise circle-rect math for pipes not within ghost's x-range (±pipe.width)
+    - Detect floor collision: ghostCenterY + radius >= canvasHeight - hudHeight
+    - Detect ceiling collision: ghostCenterY - radius <= 0
     - Return CollisionResult with collided flag and type
     - _Requirements: 4.1, 4.2, 4.3_
 
   - [ ]* 6.2 Write property test for collision (Property 11)
-    - **Property 11: AABB collision detection correctness** — Overlapping boxes always detected; boundary violations always detected
+    - **Property 11: Circle-vs-Rectangle collision detection correctness** — Circle overlapping rect always detected (distance² <= radius²); boundary violations always detected (ceiling: cy - r <= 0, floor: cy + r >= canvasHeight - hudHeight)
     - **Validates: Requirements 4.1, 4.2, 4.3**
 
   - [ ] 6.3 Implement ScoreManager module
@@ -186,11 +194,14 @@ Implement a retro-styled endless side-scrolling browser game as a single HTML5 p
 - [ ] 13. Implement particle system and visual effects
   - [ ] 13.1 Implement ParticleSystem module
     - Create ParticleSystem with update(), emitTrail(), emitBurst(), render() methods
+    - Initialize particle pool (prewarm 100 objects) at startup
+    - Use pool.acquire() when emitting; pool.release() when particle lifespan expires
     - Emit 3-8 trail particles per frame behind ghost during Playing state
     - Each particle: small circle (2-5px radius), opacity 0.3-0.6, drifts left/down, fades over 200-500ms
     - Emit 5-10 burst particles in downward fan on jump input
     - Use white/light-blue color for particles
     - Only emit in Playing state; stop in Ready/GameOver
+    - Skip draw calls for particles with opacity below 0.05
     - _Requirements: 11.7, 11.8, 11.9, 11.10_
 
   - [ ] 13.2 Implement screen shake effect
@@ -209,6 +220,10 @@ Implement a retro-styled endless side-scrolling browser game as a single HTML5 p
   - [ ] 14.1 Implement Renderer module with full draw pipeline
     - Create Renderer with draw() method taking ctx and full game state
     - Render in correct z-order: background → far clouds → mid clouds → near clouds → pipes → collectibles → particle trail → ghost sprite → score popups → HUD bar → overlays → screen shake offset
+    - Batch pipe rendering: use single beginPath() with multiple rect() calls and one fill() for all pipes (same fillStyle)
+    - Batch particle rendering: group by opacity range, set globalAlpha once per group
+    - Pre-render static HUD background bar to an offscreen canvas at init; stamp via drawImage() each frame
+    - Minimize canvas state switches by grouping draws that share fillStyle/globalAlpha/font
     - Render pipes as green rectangles with darker outline (2px+)
     - Render HUD as dark bar at bottom (40px height) with "Score: X | High: X" in monospace font (14px+)
     - Render collectibles as white rounded rectangles with oscillation animation
@@ -264,6 +279,8 @@ Implement a retro-styled endless side-scrolling browser game as a single HTML5 p
 - The game is a single index.html file — all JavaScript is embedded, no build step required
 - Test files should be in a separate `tests/` directory using Vitest + fast-check
 - For testability, game subsystems should be implemented as exportable functions/objects even though the main game is a single file
+- All tunable parameters live in a single centralized CONFIG object — subsystems read from CONFIG rather than using hardcoded magic numbers
+- URL query parameter overrides (dot-notation, e.g., `?physics.gravity=0.3`) allow rapid playtesting without editing source; different tuning profiles can be bookmarked
 
 ## Task Dependency Graph
 
