@@ -1,0 +1,107 @@
+{
+  "physics": {
+    "gravity": 800,
+    "gravityUnit": "px/s²",
+    "jumpVelocity": -300,
+    "jumpVelocityUnit": "px/s",
+    "terminalVelocityDown": 600,
+    "terminalVelocityUp": -400,
+    "velocityUnit": "px/s"
+  },
+  "walls": {
+    "speed": 120,
+    "speedUnit": "px/s",
+    "width": 60,
+    "gapSize": 140,
+    "spacing": 350,
+    "gapMinPercent": 0.2,
+    "gapMaxPercent": 0.8,
+    "fillColor": "#2ecc40",
+    "outlineColor": "#1a7a28",
+    "outlineWidth": 2
+  },
+  "ghost": {
+    "spriteWidth": 32,
+    "spriteHeight": 32,
+    "hitboxRadius": 12,
+    "startX": 120,
+    "startY": 320
+  },
+  "canvas": {
+    "width": 480,
+    "height": 640,
+    "hudHeight": 40,
+    "targetFps": 60,
+    "maxDt": 0.033,
+    "maxDtUnit": "seconds",
+    "backgroundColor": "#87CEEB"
+  },
+  "difficulty": {
+    "baseSpeed": 120,
+    "speedIncrement": 15,
+    "maxSpeed": 280,
+    "baseGap": 140,
+    "gapDecrement": 5,
+    "minGap": 90,
+    "baseSpacing": 350,
+    "spacingDecrement": 15,
+    "minSpacing": 200,
+    "scoreTierSize": 10,
+    "allUnits": "px/s for speeds, px for gaps/spacing"
+  },
+  "collectibles": {
+    "width": 30,
+    "height": 20,
+    "spawnProbabilityMin": 0.3,
+    "spawnProbabilityMax": 0.5,
+    "speedFactorMin": 0.5,
+    "speedFactorMax": 1.5,
+    "opacityMin": 0.4,
+    "opacityMax": 0.7,
+    "bonusPoints": 5
+  },
+  "clouds": {
+    "layers": [
+      { "name": "far", "speedFactor": [0.1, 0.3], "opacity": [0.1, 0.3], "scale": [0.2, 0.4] },
+      { "name": "mid", "speedFactor": [0.4, 0.6], "opacity": [0.3, 0.5], "scale": [0.5, 0.7] },
+      { "name": "near", "speedFactor": [0.7, 0.9], "opacity": [0.5, 0.7], "scale": [0.8, 1.0] }
+    ],
+    "countPerLayer": [2, 5],
+    "baseWidth": [60, 120]
+  },
+  "particles": {
+    "trailRateMin": 3,
+    "trailRateMax": 8,
+    "burstCountMin": 5,
+    "burstCountMax": 10,
+    "radiusMin": 2,
+    "radiusMax": 5,
+    "opacityMin": 0.3,
+    "opacityMax": 0.6,
+    "lifespanMin": 200,
+    "lifespanMax": 500,
+    "lifespanUnit": "ms"
+  },
+  "shake": {
+    "intensity": 3,
+    "durationMin": 200,
+    "durationMax": 400,
+    "durationUnit": "ms"
+  },
+  "scorePopup": {
+    "lifespanMin": 500,
+    "lifespanMax": 1000,
+    "lifespanUnit": "ms"
+  },
+  "audio": {
+    "musicVolume": 0.3,
+    "sfxVolume": 1.0
+  },
+  "pools": {
+    "pipes": 8,
+    "collectibles": 6,
+    "particles": 100,
+    "scorePopups": 5,
+    "clouds": 15
+  }
+}
