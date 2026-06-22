@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flappy Kiro</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #222; }
+canvas {
+  display: block;
+  margin: auto;
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ============================================================
+// CONFIG — Single source of truth for all tunable parameters
+// ============================================================
+const CONFIG = {
+  canvas: { width: 480, height: 640, hudHeight: 40, maxDt: 0.033 },
+  physics: { gravity: 800, jumpVelocity: -300, terminalVelocityDown: 600, terminalVelocityUp: -400 },
+  difficulty: {
+    baseSpeed: 120, speedIncrement: 15, maxSpeed: 280,
+    baseGap: 140, gapDecrement: 5, minGap: 90,
+    baseSpacing: 350, spacingDecrement: 15, minSpacing: 200,
+    scoreTierSize: 10
+  },
+  ghost: { width: 32, height: 32, hitboxRadius: 12, startX: 120, startY: 320 },
+  pipes: { width: 60, gapMinPercent: 0.2, gapMaxPercent: 0.8, fillColor: '#2ecc40', outlineColor: '#1a7a28', outlineWidth: 2 },
+  collectibles: { width: 30, height: 20, spawnProb: 0.4, speedFactorMin: 0.5, speedFactorMax: 1.5, opacityMin: 0.4, opacityMax: 0.7, bonusPoints: 5 },
+  clouds: {
+    layers: [
+      { speedFactor: 0.2, opacity: 0.2, scale: 0.3 },
+      { speedFactor: 0.5, opacity: 0.4, scale: 0.6 },
+      { speedFactor: 0.8, opacity: 0.6, scale: 0.9 }
+    ],
+    countPerLayer: 4, baseWidth: 80
+  },
+  particles: { trailRate: 5, burstCount: 8, radiusMin: 2, radiusMax: 5, opacityMax: 0.5, lifespanMin: 200, lifespanMax: 500 },
+  shake: { intensity: 3, duration: 300 },
+  scorePopup: { lifespan: 700 },
+  audio: { musicVolume: 0.3 }
+};
+</script>
+<script>
+// ============================================================
+// URL Parameter Overrides
+// ============================================================
+(function applyUrlOverrides() {
+  const params = new URLSearchParams(window.location.search);
+  for (const [key, value] of params) {
+    const parts = key.split('.');
+    let target = CONFIG;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (target[parts[i]] !== undefined) target = target[parts[i]];
+      else { target = null; break; }
+    }
+    if (target && target[parts[parts.length - 1]] !== undefined) {
+      const existing = target[parts[parts.length - 1]];
+      if (typeof existing === 'number') target[parts[parts.length - 1]] = parseFloat(value);
+    }
+  }
+})();
+
+// ============================================================
+// Canvas Setup
+// ============================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = CONFIG.canvas.width;
+canvas.height = CONFIG.canvas.height;
+ctx.imageSmoothingEnabled = false;
+
+// Scale canvas to fit window
+function resizeCanvas() {
+  const scaleX = window.innerWidth / CONFIG.canvas.width;
+  const scaleY = window.innerHeight / CONFIG.canvas.height;
+  const scale = Math.min(scaleX, scaleY);
+  canvas.style.width = (CONFIG.canvas.width * scale) + 'px';
+  canvas.style.height = (CONFIG.canvas.height * scale) + 'px';
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ============================================================
+// Asset Loading
+// ============================================================
+const assets = { ghostImg: null, jumpSnd: null, gameOverSnd: null };
+let audioCtx = null;
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load: ' + src));
+    img.src = src;
+  });
+}
+
+async function loadAudio(src) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const resp = await fetch(src);
+    const buf = await resp.arrayBuffer();
+    return await audioCtx.decodeAudioData(buf);
+  } catch (e) { return null; }
+}
+
+// ============================================================
+// Audio Manager
+// ============================================================
+const AudioManager = {
+  play(buffer) {
+    if (!audioCtx || !buffer) return;
+    try {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioCtx.destination);
+      source.start(0);
+    } catch (e) {}
+  },
+  playJump() { this.play(assets.jumpSnd); },
+  playGameOver() { this.play(assets.gameOverSnd); },
+  playScore() {
+    if (!audioCtx) return;
+    try {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523, audioCtx.currentTime);
+      osc.frequency.setValueAtTime(659, audioCtx.currentTime + 0.08);
+      gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + 0.2);
+    } catch (e) {}
+  }
+};
+
+// ============================================================
+// Input Handler
+// ============================================================
+const InputHandler = {
+  _jump: false,
+  _pause: false,
+  init() {
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'Space') { e.preventDefault(); this._jump = true; }
+      if (e.code === 'Escape' || e.code === 'KeyP') this._pause = true;
+    });
+    canvas.addEventListener('mousedown', () => { this._jump = true; });
+    canvas.addEventListener('touchstart', (e) => { e.preventDefault(); this._jump = true; });
+  },
+  pollJump() { const v = this._jump; this._jump = false; return v; },
+  pollPause() { const v = this._pause; this._pause = false; return v; },
+  reset() { this._jump = false; this._pause = false; }
+};
+
+// ============================================================
+// State Manager
+// ============================================================
+const StateManager = {
+  currentState: 'ready',
+  _transitions: { ready: ['playing'], playing: ['paused', 'game_over'], paused: ['playing'], game_over: ['ready'] },
+  transition(s) {
+    if (this._transitions[this.currentState] && this._transitions[this.currentState].includes(s)) {
+      this.currentState = s; return true;
+    }
+    return false;
+  },
+  isPlaying() { return this.currentState === 'playing'; },
+  isPaused() { return this.currentState === 'paused'; },
+  isReady() { return this.currentState === 'ready'; },
+  isGameOver() { return this.currentState === 'game_over'; }
+};
+
+// ============================================================
+// Game State
+// ============================================================
+let gameState = null;
+function createGameState() {
+  return {
+    ghost: { x: CONFIG.ghost.startX, y: CONFIG.ghost.startY, velocity: 0 },
+    pipes: [],
+    collectibles: [],
+    clouds: [],
+    particles: [],
+    scorePopups: [],
+    score: 0,
+    highScore: loadHighScore(),
+    isNewHighScore: false,
+    difficulty: { pipeSpeed: CONFIG.difficulty.baseSpeed, gapHeight: CONFIG.difficulty.baseGap, pipeSpacing: CONFIG.difficulty.baseSpacing },
+    shake: { active: false, elapsed: 0 },
+    pipeTimer: 0,
+    time: 0
+  };
+}
+
+function loadHighScore() {
+  try { return parseInt(localStorage.getItem('flappyKiroHigh')) || 0; } catch (e) { return 0; }
+}
+function saveHighScore(score) {
+  try { localStorage.setItem('flappyKiroHigh', score); } catch (e) {}
+}
+
+// ============================================================
+// Physics Engine
+// ============================================================
+const PhysicsEngine = {
+  update(ghost, dt) {
+    if (!StateManager.isPlaying()) return;
+    ghost.velocity += CONFIG.physics.gravity * dt;
+    ghost.velocity = _clamp(ghost.velocity, CONFIG.physics.terminalVelocityUp, CONFIG.physics.terminalVelocityDown);
+    ghost.y += ghost.velocity * dt;
+  },
+  applyJump(ghost) {
+    ghost.velocity = CONFIG.physics.jumpVelocity;
+  }
+};
+
+function _clamp(val, min, max) { return val < min ? min : val > max ? max : val; }
+
+// ============================================================
+// Difficulty Manager
+// ============================================================
+const DifficultyManager = {
+  evaluate(score) {
+    const tier = Math.floor(score / CONFIG.difficulty.scoreTierSize);
+    return {
+      pipeSpeed: Math.min(CONFIG.difficulty.baseSpeed + tier * CONFIG.difficulty.speedIncrement, CONFIG.difficulty.maxSpeed),
+      gapHeight: Math.max(CONFIG.difficulty.baseGap - tier * CONFIG.difficulty.gapDecrement, CONFIG.difficulty.minGap),
+      pipeSpacing: Math.max(CONFIG.difficulty.baseSpacing - tier * CONFIG.difficulty.spacingDecrement, CONFIG.difficulty.minSpacing)
+    };
+  }
+};
+
+// ============================================================
+// Collision Detector (Circle vs Rect)
+// ============================================================
+const CollisionDetector = {
+  check(ghost, pipes) {
+    const cx = ghost.x + CONFIG.ghost.width / 2;
+    const cy = ghost.y + CONFIG.ghost.height / 2;
+    const r = CONFIG.ghost.hitboxRadius;
+    // Boundary checks
+    if (cy + r >= CONFIG.canvas.height - CONFIG.canvas.hudHeight) return { collided: true, type: 'floor' };
+    if (cy - r <= 0) return { collided: true, type: 'ceiling' };
+    // Pipe checks
+    for (const pipe of pipes) {
+      if (pipe.x > cx + r + CONFIG.pipes.width) continue;
+      if (pipe.x + CONFIG.pipes.width < cx - r) continue;
+      const topH = pipe.gapCenterY - pipe.gapHeight / 2;
+      const botY = pipe.gapCenterY + pipe.gapHeight / 2;
+      if (this._circleRect(cx, cy, r, pipe.x, 0, CONFIG.pipes.width, topH)) return { collided: true, type: 'pipe' };
+      if (this._circleRect(cx, cy, r, pipe.x, botY, CONFIG.pipes.width, CONFIG.canvas.height - botY)) return { collided: true, type: 'pipe' };
+    }
+    return { collided: false, type: null };
+  },
+  _circleRect(cx, cy, r, rx, ry, rw, rh) {
+    const closestX = _clamp(cx, rx, rx + rw);
+    const closestY = _clamp(cy, ry, ry + rh);
+    const dx = cx - closestX;
+    const dy = cy - closestY;
+    return (dx * dx + dy * dy) <= (r * r);
+  }
+};
+
+// ============================================================
+// Scrolling Engine
+// ============================================================
+const ScrollingEngine = {
+  update(gs, dt) {
+    const speed = gs.difficulty.pipeSpeed;
+    // Pipes
+    if (StateManager.isPlaying()) {
+      gs.pipeTimer += speed * dt;
+      if (gs.pipes.length === 0 || gs.pipeTimer >= gs.difficulty.pipeSpacing) {
+        gs.pipeTimer = 0;
+        this._spawnPipe(gs);
+      }
+      for (const pipe of gs.pipes) pipe.x -= speed * dt;
+      // Collectibles
+      for (const c of gs.collectibles) c.x -= c.speed * dt;
+    }
+    // Clouds (scroll in all states except paused)
+    if (!StateManager.isPaused()) {
+      for (const cloud of gs.clouds) {
+        cloud.x -= cloud.speed * dt;
+        if (cloud.x + cloud.width < 0) {
+          cloud.x = CONFIG.canvas.width + Math.random() * 100;
+          cloud.y = Math.random() * (CONFIG.canvas.height - CONFIG.canvas.hudHeight - 60);
+        }
+      }
+    }
+    // Remove off-screen
+    gs.pipes = gs.pipes.filter(p => p.x + CONFIG.pipes.width > -10);
+    gs.collectibles = gs.collectibles.filter(c => !c.collected && c.x + c.width > 0);
+  },
+  _spawnPipe(gs) {
+    const playableH = CONFIG.canvas.height - CONFIG.canvas.hudHeight;
+    const minY = playableH * CONFIG.pipes.gapMinPercent;
+    const maxY = playableH * CONFIG.pipes.gapMaxPercent;
+    const gapCenterY = minY + Math.random() * (maxY - minY);
+    gs.pipes.push({ x: CONFIG.canvas.width, gapCenterY, gapHeight: gs.difficulty.gapHeight, scored: false });
+    // Maybe spawn collectible
+    if (gs.pipes.length >= 2 && Math.random() < CONFIG.collectibles.spawnProb) {
+      const prev = gs.pipes[gs.pipes.length - 2];
+      const curr = gs.pipes[gs.pipes.length - 1];
+      const midX = (prev.x + CONFIG.pipes.width + curr.x) / 2;
+      const speedFactor = CONFIG.collectibles.speedFactorMin + Math.random() * (CONFIG.collectibles.speedFactorMax - CONFIG.collectibles.speedFactorMin);
+      const opacity = CONFIG.collectibles.opacityMin + (speedFactor - CONFIG.collectibles.speedFactorMin) / (CONFIG.collectibles.speedFactorMax - CONFIG.collectibles.speedFactorMin) * (CONFIG.collectibles.opacityMax - CONFIG.collectibles.opacityMin);
+      gs.collectibles.push({
+        x: midX, y: minY + Math.random() * (maxY - minY),
+        width: CONFIG.collectibles.width, height: CONFIG.collectibles.height,
+        speed: gs.difficulty.pipeSpeed * speedFactor, opacity, collected: false, phase: Math.random() * Math.PI * 2
+      });
+    }
+  },
+  initClouds(gs) {
+    gs.clouds = [];
+    for (const layer of CONFIG.clouds.layers) {
+      for (let i = 0; i < CONFIG.clouds.countPerLayer; i++) {
+        gs.clouds.push({
+          x: Math.random() * CONFIG.canvas.width,
+          y: Math.random() * (CONFIG.canvas.height - CONFIG.canvas.hudHeight - 40),
+          width: CONFIG.clouds.baseWidth * layer.scale,
+          height: CONFIG.clouds.baseWidth * layer.scale * 0.5,
+          speed: CONFIG.difficulty.baseSpeed * layer.speedFactor,
+          opacity: layer.opacity, scale: layer.scale
+        });
+      }
+    }
+  }
+};
+
+// ============================================================
+// Score Manager
+// ============================================================
+const ScoreManager = {
+  update(gs) {
+    if (!StateManager.isPlaying()) return;
+    const ghostRight = gs.ghost.x + CONFIG.ghost.width;
+    for (const pipe of gs.pipes) {
+      if (!pipe.scored && ghostRight > pipe.x + CONFIG.pipes.width) {
+        pipe.scored = true;
+        gs.score++;
+        gs.scorePopups.push({ x: gs.ghost.x + CONFIG.ghost.width, y: gs.ghost.y, text: '+1', age: 0 });
+        AudioManager.playScore();
+      }
+    }
+    // Collectible pickup
+    const cx = gs.ghost.x + CONFIG.ghost.width / 2;
+    const cy = gs.ghost.y + CONFIG.ghost.height / 2;
+    const r = CONFIG.ghost.hitboxRadius;
+    for (const c of gs.collectibles) {
+      if (c.collected) continue;
+      if (CollisionDetector._circleRect(cx, cy, r, c.x, c.y, c.width, c.height)) {
+        c.collected = true;
+        gs.score += CONFIG.collectibles.bonusPoints;
+        gs.scorePopups.push({ x: c.x, y: c.y, text: '+5', age: 0 });
+        AudioManager.playScore();
+      }
+    }
+    gs.difficulty = DifficultyManager.evaluate(gs.score);
+  }
+};
+
+// ============================================================
+// Particle System
+// ============================================================
+const ParticleSystem = {
+  update(gs, dt) {
+    if (StateManager.isPlaying()) {
+      for (let i = 0; i < CONFIG.particles.trailRate; i++) {
+        gs.particles.push({
+          x: gs.ghost.x, y: gs.ghost.y + CONFIG.ghost.height / 2 + (Math.random() - 0.5) * 10,
+          vx: -(30 + Math.random() * 20), vy: (Math.random() - 0.5) * 20,
+          radius: CONFIG.particles.radiusMin + Math.random() * (CONFIG.particles.radiusMax - CONFIG.particles.radiusMin),
+          opacity: CONFIG.particles.opacityMax,
+          life: CONFIG.particles.lifespanMin + Math.random() * (CONFIG.particles.lifespanMax - CONFIG.particles.lifespanMin),
+          age: 0
+        });
+      }
+    }
+    for (const p of gs.particles) {
+      p.age += dt * 1000;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.opacity = CONFIG.particles.opacityMax * (1 - p.age / p.life);
+    }
+    gs.particles = gs.particles.filter(p => p.age < p.life);
+    // Score popups
+    for (const sp of gs.scorePopups) {
+      sp.age += dt * 1000;
+      sp.y -= 40 * dt;
+    }
+    gs.scorePopups = gs.scorePopups.filter(sp => sp.age < CONFIG.scorePopup.lifespan);
+  },
+  emitBurst(gs) {
+    for (let i = 0; i < CONFIG.particles.burstCount; i++) {
+      const angle = Math.PI / 2 + (Math.random() - 0.5) * 1.2;
+      gs.particles.push({
+        x: gs.ghost.x + CONFIG.ghost.width / 2, y: gs.ghost.y + CONFIG.ghost.height,
+        vx: Math.cos(angle) * (60 + Math.random() * 40), vy: Math.sin(angle) * (60 + Math.random() * 40),
+        radius: CONFIG.particles.radiusMin + Math.random() * 3,
+        opacity: CONFIG.particles.opacityMax, life: 300, age: 0
+      });
+    }
+  }
+};
+
+// ============================================================
+// Renderer
+// ============================================================
+const Renderer = {
+  draw(gs) {
+    // Screen shake offset
+    let shakeX = 0, shakeY = 0;
+    if (gs.shake.active) {
+      const decay = 1 - gs.shake.elapsed / CONFIG.shake.duration;
+      shakeX = (Math.random() * 2 - 1) * CONFIG.shake.intensity * decay;
+      shakeY = (Math.random() * 2 - 1) * CONFIG.shake.intensity * decay;
+    }
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+
+    // Background
+    ctx.fillStyle = '#87CEEB';
+    ctx.fillRect(0, 0, CONFIG.canvas.width, CONFIG.canvas.height);
+
+    // Clouds
+    ctx.fillStyle = '#ffffff';
+    for (const cloud of gs.clouds) {
+      ctx.globalAlpha = cloud.opacity;
+      ctx.beginPath();
+      ctx.ellipse(cloud.x + cloud.width / 2, cloud.y + cloud.height / 2, cloud.width / 2, cloud.height / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Pipes
+    ctx.fillStyle = CONFIG.pipes.fillColor;
+    ctx.beginPath();
+    for (const pipe of gs.pipes) {
+      const topH = pipe.gapCenterY - pipe.gapHeight / 2;
+      const botY = pipe.gapCenterY + pipe.gapHeight / 2;
+      ctx.rect(pipe.x, 0, CONFIG.pipes.width, topH);
+      ctx.rect(pipe.x, botY, CONFIG.pipes.width, CONFIG.canvas.height - CONFIG.canvas.hudHeight - botY);
+    }
+    ctx.fill();
+    ctx.strokeStyle = CONFIG.pipes.outlineColor;
+    ctx.lineWidth = CONFIG.pipes.outlineWidth;
+    ctx.beginPath();
+    for (const pipe of gs.pipes) {
+      const topH = pipe.gapCenterY - pipe.gapHeight / 2;
+      const botY = pipe.gapCenterY + pipe.gapHeight / 2;
+      ctx.rect(pipe.x, 0, CONFIG.pipes.width, topH);
+      ctx.rect(pipe.x, botY, CONFIG.pipes.width, CONFIG.canvas.height - CONFIG.canvas.hudHeight - botY);
+    }
+    ctx.stroke();
+
+    // Collectibles
+    for (const c of gs.collectibles) {
+      if (c.collected) continue;
+      ctx.globalAlpha = c.opacity;
+      const oscY = c.y + Math.sin(gs.time * 3 + c.phase) * 8;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.roundRect(c.x, oscY, c.width, c.height, 6);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Particles
+    for (const p of gs.particles) {
+      if (p.opacity < 0.05) continue;
+      ctx.globalAlpha = p.opacity;
+      ctx.fillStyle = '#b0e0ff';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Ghost
+    if (assets.ghostImg) {
+      ctx.drawImage(assets.ghostImg, gs.ghost.x, gs.ghost.y, CONFIG.ghost.width, CONFIG.ghost.height);
+    } else {
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(gs.ghost.x + CONFIG.ghost.width / 2, gs.ghost.y + CONFIG.ghost.height / 2, CONFIG.ghost.width / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Score Popups
+    ctx.font = 'bold 14px monospace';
+    for (const sp of gs.scorePopups) {
+      ctx.globalAlpha = 1 - sp.age / CONFIG.scorePopup.lifespan;
+      ctx.fillStyle = sp.text === '+5' ? '#FFD700' : '#ffffff';
+      ctx.fillText(sp.text, sp.x, sp.y);
+    }
+    ctx.globalAlpha = 1;
+
+    // HUD
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(0, CONFIG.canvas.height - CONFIG.canvas.hudHeight, CONFIG.canvas.width, CONFIG.canvas.hudHeight);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '16px monospace';
+    ctx.textBaseline = 'middle';
+    const hudY = CONFIG.canvas.height - CONFIG.canvas.hudHeight / 2;
+    ctx.textAlign = 'left';
+    ctx.fillText('Score: ' + gs.score, 12, hudY);
+    ctx.textAlign = 'right';
+    ctx.fillText('High: ' + gs.highScore, CONFIG.canvas.width - 12, hudY);
+    ctx.textAlign = 'left';
+
+    ctx.restore();
+
+    // Overlays (drawn after restore so they don't shake)
+    this._drawOverlay(gs);
+  },
+  _drawOverlay(gs) {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const centerX = CONFIG.canvas.width / 2;
+
+    if (StateManager.isReady()) {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 28px monospace';
+      ctx.fillText('FLAPPY KIRO', centerX, CONFIG.canvas.height * 0.2);
+      ctx.font = '16px monospace';
+      ctx.globalAlpha = 0.6 + 0.4 * Math.sin(Date.now() / 500);
+      ctx.fillText('TAP or SPACE to play', centerX, CONFIG.canvas.height * 0.6);
+      ctx.globalAlpha = 1;
+      ctx.font = '14px monospace';
+      ctx.fillText('Best: ' + gs.highScore, centerX, CONFIG.canvas.height * 0.7);
+    }
+
+    if (StateManager.isPaused()) {
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0, 0, CONFIG.canvas.width, CONFIG.canvas.height - CONFIG.canvas.hudHeight);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 28px monospace';
+      ctx.fillText('PAUSED', centerX, CONFIG.canvas.height * 0.45);
+      ctx.font = '14px monospace';
+      ctx.fillText('Press ESC to resume', centerX, CONFIG.canvas.height * 0.55);
+    }
+
+    if (StateManager.isGameOver()) {
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(0, 0, CONFIG.canvas.width, CONFIG.canvas.height - CONFIG.canvas.hudHeight);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 24px monospace';
+      ctx.fillText('GAME OVER', centerX, CONFIG.canvas.height * 0.3);
+      ctx.font = '18px monospace';
+      ctx.fillText('Score: ' + gs.score, centerX, CONFIG.canvas.height * 0.42);
+      ctx.fillText('Best: ' + gs.highScore, centerX, CONFIG.canvas.height * 0.5);
+      if (gs.isNewHighScore) {
+        ctx.fillStyle = '#FFD700';
+        ctx.font = 'bold 16px monospace';
+        ctx.fillText('NEW HIGH SCORE!', centerX, CONFIG.canvas.height * 0.58);
+      }
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '14px monospace';
+      ctx.globalAlpha = 0.6 + 0.4 * Math.sin(Date.now() / 500);
+      ctx.fillText('TAP or SPACE to restart', centerX, CONFIG.canvas.height * 0.7);
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+};
+
+// ============================================================
+// Game Loop
+// ============================================================
+let lastTimestamp = 0;
+
+function tick(timestamp) {
+  const dt = Math.min((timestamp - lastTimestamp) / 1000, CONFIG.canvas.maxDt);
+  lastTimestamp = timestamp;
+  gameState.time += dt;
+
+  // Input
+  const jump = InputHandler.pollJump();
+  const pause = InputHandler.pollPause();
+
+  // State transitions
+  if (StateManager.isReady() && jump) {
+    StateManager.transition('playing');
+  } else if (StateManager.isPlaying() && pause) {
+    StateManager.transition('paused');
+  } else if (StateManager.isPaused() && pause) {
+    StateManager.transition('playing');
+  } else if (StateManager.isGameOver() && jump) {
+    StateManager.transition('ready');
+    gameState = createGameState();
+    ScrollingEngine.initClouds(gameState);
+  }
+
+  // Jump
+  if (StateManager.isPlaying() && jump) {
+    PhysicsEngine.applyJump(gameState.ghost);
+    AudioManager.playJump();
+    ParticleSystem.emitBurst(gameState);
+  }
+
+  // Physics
+  PhysicsEngine.update(gameState.ghost, dt);
+
+  // Scrolling
+  ScrollingEngine.update(gameState, dt);
+
+  // Collision
+  if (StateManager.isPlaying()) {
+    const result = CollisionDetector.check(gameState.ghost, gameState.pipes);
+    if (result.collided) {
+      StateManager.transition('game_over');
+      AudioManager.playGameOver();
+      gameState.shake.active = true;
+      gameState.shake.elapsed = 0;
+      if (gameState.score > gameState.highScore) {
+        gameState.highScore = gameState.score;
+        gameState.isNewHighScore = true;
+        saveHighScore(gameState.highScore);
+      }
+    }
+  }
+
+  // Scoring
+  ScoreManager.update(gameState);
+
+  // Particles
+  ParticleSystem.update(gameState, dt);
+
+  // Shake timer
+  if (gameState.shake.active) {
+    gameState.shake.elapsed += dt * 1000;
+    if (gameState.shake.elapsed >= CONFIG.shake.duration) gameState.shake.active = false;
+  }
+
+  // Render
+  Renderer.draw(gameState);
+
+  requestAnimationFrame(tick);
+}
+
+// ============================================================
+// Bootstrap
+// ============================================================
+async function init() {
+  InputHandler.init();
+
+  // Load assets (non-blocking, game works without them)
+  try { assets.ghostImg = await loadImage('assets/ghosty.png'); } catch (e) { console.warn('Ghost sprite not loaded, using fallback circle'); }
+  try { assets.jumpSnd = await loadAudio('assets/jump.wav'); } catch (e) {}
+  try { assets.gameOverSnd = await loadAudio('assets/game_over.wav'); } catch (e) {}
+
+  gameState = createGameState();
+  ScrollingEngine.initClouds(gameState);
+
+  lastTimestamp = performance.now();
+  requestAnimationFrame(tick);
+}
+
+init();
+</script>
+</body>
+</html>
