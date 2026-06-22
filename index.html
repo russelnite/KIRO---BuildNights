@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Flappy Kiro</title>
+  <title>Flappy Nailong</title>
   <style>
     * {
       margin: 0;
@@ -15,56 +15,58 @@
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #000;
+      background: #1a1a2e;
       display: flex;
       align-items: center;
       justify-content: center;
     }
 
+    /* Framed game box, centered in the viewport at native resolution (matches v1) */
+    #game-wrapper {
+      position: relative;
+      border: 4px solid #2d2d44;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #000;
+    }
+
     canvas {
       display: block;
-      max-width: 100vw;
-      max-height: 100vh;
-      width: auto;
-      height: auto;
-      aspect-ratio: 480 / 640;
       image-rendering: pixelated;
       image-rendering: crisp-edges;
     }
 
-    /* Scale canvas to fill viewport while maintaining aspect ratio */
-    @media (max-aspect-ratio: 480/640) {
-      canvas {
-        width: 100vw;
-        height: auto;
-      }
+    #score-bar {
+      background: #2d2d44;
+      color: #ffffff;
+      text-align: center;
+      padding: 10px;
+      font: bold 20px monospace;
+      letter-spacing: 1px;
     }
 
-    @media (min-aspect-ratio: 480/640) {
-      canvas {
-        width: auto;
-        height: 100vh;
-      }
-    }
   </style>
 </head>
 <body>
-  <canvas id="game" width="480" height="640"></canvas>
+  <div id="game-wrapper">
+    <canvas id="game" width="800" height="600"></canvas>
+    <div id="score-bar">Score: 0 | High: 0</div>
+  </div>
   <script>
     // ============================================================
     // CONFIG — Centralized tunable parameters (single source of truth)
     // ============================================================
     const CONFIG = {
       canvas: {
-        width: 480,
-        height: 640,
-        hudHeight: 40,
+        width: 800,
+        height: 600,
+        hudHeight: 0,
         targetFps: 60,
         maxDt: 0.033,
         backgroundColor: '#87CEEB'
       },
       physics: {
-        gravity: 800,
+        gravity: 900,
         jumpVelocity: -300,
         terminalVelocityDown: 600,
         terminalVelocityUp: -400
@@ -82,11 +84,32 @@
         scoreTierSize: 10
       },
       ghost: {
-        width: 32,
-        height: 32,
-        hitboxRadius: 12,
-        startX: 120,
-        startY: 320
+        width: 44,
+        height: 44,
+        hitboxRadius: 16,
+        startX: 150,
+        startY: 300
+      },
+      character: {
+        spriteWidth: 44,
+        spriteHeight: 44,
+        hitboxRadius: 16,
+        startX: 150,
+        startY: 300,
+        maxDownTilt: 0.6,
+        maxUpTilt: 0.4,
+        maxDescentVelocity: 600,
+        maxAscentVelocity: 400
+      },
+      wingAnimation: {
+        baseRateMin: 250,
+        baseRateMax: 350,
+        jumpRateMin: 120,
+        jumpRateMax: 180,
+        rapidRateMin: 60,
+        rapidRateMax: 100,
+        jumpBoostDuration: 300,
+        rapidDetectionWindow: 200
       },
       pipes: {
         width: 60,
@@ -94,7 +117,27 @@
         gapMaxPercent: 0.8,
         fillColor: '#2ecc40',
         outlineColor: '#1a7a28',
-        outlineWidth: 2
+        outlineWidth: 2,
+        capOverhang: 8,
+        capHeight: 25,
+        capBorderRadius: 4,
+        capColor: '#1a7a28'
+      },
+      flyingObstacles: {
+        activationThreshold: 30,
+        maxOnScreen: 2,
+        baseSpawnIntervalMin: 3000,
+        baseSpawnIntervalMax: 5000,
+        minSpawnIntervalMin: 1500,
+        minSpawnIntervalMax: 2500,
+        spawnIntervalDecrement: 400,
+        baseSpeedMultiplier: 1.2,
+        maxSpeedMultiplier: 2.0,
+        speedMultiplierIncrement: 0.2,
+        spawnYMinPercent: 0.15,
+        spawnYMaxPercent: 0.85,
+        heightRatio: 1.0,
+        poolSize: 4
       },
       collectibles: {
         width: 30,
@@ -231,7 +274,8 @@
           width: CONFIG.ghost.width,
           height: CONFIG.ghost.height,
           velocity: 0,
-          hitboxRadius: CONFIG.ghost.hitboxRadius
+          hitboxRadius: CONFIG.ghost.hitboxRadius,
+          tiltAngle: 0
         },
 
         // Pipes (managed via pool)
@@ -246,8 +290,15 @@
         // Particles (managed via pool)
         particles: [],
 
+        // Flying obstacles (managed via pool)
+        flyingObstacles: [],
+
         // Score popups (managed via pool)
         scorePopups: [],
+
+        // Flying obstacle spawn timer
+        flyingObsSpawnTimer: 0,
+        flyingObsCurrentInterval: 0,
 
         // Scoring
         score: 0,
@@ -370,9 +421,12 @@
       gameState.ghost.y = CONFIG.ghost.startY;
       gameState.ghost.velocity = 0;
 
-      // Clear pipes and collectibles
+      // Clear pipes, collectibles, and flying obstacles
       gameState.pipes.length = 0;
       gameState.collectibles.length = 0;
+      gameState.flyingObstacles.length = 0;
+      gameState.flyingObsSpawnTimer = 0;
+      gameState.flyingObsCurrentInterval = 0;
 
       // Reset particles and popups
       ParticleSystem.reset();
@@ -387,6 +441,9 @@
 
       // Reset difficulty to base
       gameState.difficulty = DifficultyManager.evaluate(0);
+
+      // Reset wing animation controller
+      wingAnimController.reset();
 
       // Clouds persist across games (visual continuity)
 
@@ -768,7 +825,22 @@
         return collected;
       }
 
-      return { check, checkCollectibles };
+      function checkFlyingObstacles(ghost, flyingObstacles) {
+        const cx = ghost.x + ghost.width / 2;
+        const cy = ghost.y + ghost.height / 2;
+        const r = ghost.hitboxRadius;
+
+        for (let i = 0; i < flyingObstacles.length; i++) {
+          const obs = flyingObstacles[i];
+          if (!obs.active) continue;
+          if (circleRectCollision(cx, cy, r, obs.x, obs.y, obs.width, obs.height)) {
+            return { collided: true };
+          }
+        }
+        return { collided: false };
+      }
+
+      return { check, checkCollectibles, checkFlyingObstacles };
     })();
     // DifficultyManager — Adjusts game parameters based on current score
     const DifficultyManager = {
@@ -778,7 +850,33 @@
         const pipeSpeed = Math.min(d.baseSpeed + tier * d.speedIncrement, d.maxSpeed);
         const gapHeight = Math.max(d.baseGap - tier * d.gapDecrement, d.minGap);
         const pipeSpacing = Math.max(d.baseSpacing - tier * d.spacingDecrement, d.minSpacing);
-        return { pipeSpeed, gapHeight, pipeSpacing };
+
+        // Flying obstacle parameters: only active when score >= activation threshold
+        const fCfg = CONFIG.flyingObstacles;
+        let flyingObstacleSpeedMultiplier = null;
+        let flyingObstacleSpawnInterval = null;
+
+        if (score >= fCfg.activationThreshold) {
+          const obstacleScore = score - fCfg.activationThreshold;
+          const obstacleTier = Math.floor(obstacleScore / 10);
+
+          flyingObstacleSpeedMultiplier = Math.min(
+            fCfg.baseSpeedMultiplier + obstacleTier * fCfg.speedMultiplierIncrement,
+            fCfg.maxSpeedMultiplier
+          );
+
+          const intervalMin = Math.max(
+            fCfg.baseSpawnIntervalMin - obstacleTier * fCfg.spawnIntervalDecrement,
+            fCfg.minSpawnIntervalMin
+          );
+          const intervalMax = Math.max(
+            fCfg.baseSpawnIntervalMax - obstacleTier * fCfg.spawnIntervalDecrement,
+            fCfg.minSpawnIntervalMax
+          );
+          flyingObstacleSpawnInterval = { min: intervalMin, max: intervalMax };
+        }
+
+        return { pipeSpeed, gapHeight, pipeSpacing, flyingObstacleSpeedMultiplier, flyingObstacleSpawnInterval };
       }
     };
 
@@ -934,10 +1032,12 @@
         const count = CONFIG.particles.trailRateMin + Math.floor(Math.random() * (CONFIG.particles.trailRateMax - CONFIG.particles.trailRateMin + 1));
         for (let i = 0; i < count; i++) {
           const p = pool.acquire();
-          p.x = ghost.x;
-          p.y = ghost.y + ghost.height / 2 + (Math.random() * 10 - 5);
+          // Emit from just behind the body center (sprite now faces right) so the
+          // trail hugs Nailong instead of drifting off its lower-left corner
+          p.x = ghost.x + ghost.width * 0.32;
+          p.y = ghost.y + ghost.height * 0.55 + (Math.random() * 6 - 3);
           p.vx = -(30 + Math.random() * 20);  // drift left: -30 to -50 px/s
-          p.vy = 10 + Math.random() * 10;      // slight downward: 10-20 px/s
+          p.vy = 6 + Math.random() * 8;        // slight downward: 6-14 px/s
           p.radius = CONFIG.particles.radiusMin + Math.random() * (CONFIG.particles.radiusMax - CONFIG.particles.radiusMin);
           p.opacity = CONFIG.particles.opacityMin + Math.random() * (CONFIG.particles.opacityMax - CONFIG.particles.opacityMin);
           p.startOpacity = p.opacity;
@@ -1258,19 +1358,417 @@
       };
     })();
 
+    // ============================================================
+    // WingAnimController — Inline version of src/WingAnimController.js
+    // Manages three-tier wing animation speed based on player input state.
+    // ============================================================
+    function createWingAnimController(config) {
+      const cfg = {
+        baseRateMin: (config.baseRateMin > 0) ? config.baseRateMin : 250,
+        baseRateMax: (config.baseRateMax > 0) ? config.baseRateMax : 350,
+        jumpRateMin: (config.jumpRateMin > 0) ? config.jumpRateMin : 120,
+        jumpRateMax: (config.jumpRateMax > 0) ? config.jumpRateMax : 180,
+        rapidRateMin: (config.rapidRateMin > 0) ? config.rapidRateMin : 60,
+        rapidRateMax: (config.rapidRateMax > 0) ? config.rapidRateMax : 100,
+        jumpBoostDuration: (config.jumpBoostDuration > 0) ? config.jumpBoostDuration : 300,
+        rapidDetectionWindow: (config.rapidDetectionWindow > 0) ? config.rapidDetectionWindow : 200
+      };
+
+      let currentFrame = 'up';
+      let frameTimer = 0;
+      let tier = 'base';
+      let currentRate = (cfg.baseRateMin + cfg.baseRateMax) / 2;
+      let jumpBoostTimer = 0;
+      let lastJumpTimestamps = [];
+      let elapsedTime = 0;
+      // Single jump → a calm two-phase wingbeat (down, then up), then resume base loop.
+      // Continuous/rapid jumps keep the fast switching cycle instead.
+      let flapPhase = 0;        // 0 = not flapping, 1 = downstroke, 2 = upstroke
+      let flapTimer = 0;        // ms remaining in the current flap half
+      const FLAP_HALF_MS = 90;  // duration of each half of the single-jump flap
+
+      function _getRateForTier(t) {
+        switch (t) {
+          case 'jump': return (cfg.jumpRateMin + cfg.jumpRateMax) / 2;
+          case 'rapid': return (cfg.rapidRateMin + cfg.rapidRateMax) / 2;
+          default: return (cfg.baseRateMin + cfg.baseRateMax) / 2;
+        }
+      }
+
+      function _advanceFrame(dtMs) {
+        frameTimer += dtMs;
+        while (frameTimer >= currentRate) {
+          frameTimer -= currentRate;
+          currentFrame = (currentFrame === 'up') ? 'down' : 'up';
+        }
+      }
+
+      function _pruneJumpTimestamps() {
+        const cutoff = elapsedTime - cfg.rapidDetectionWindow;
+        while (lastJumpTimestamps.length > 0 && lastJumpTimestamps[0] < cutoff) {
+          lastJumpTimestamps.shift();
+        }
+      }
+
+      function _isRapidJumping() {
+        return lastJumpTimestamps.length >= 2;
+      }
+
+      function update(dt, jumpTriggeredThisFrame, jumpHeld, gameState) {
+        if (dt <= 0) return;
+        if (gameState === 'paused' || gameState === 'game_over') return;
+
+        const dtMs = dt * 1000;
+        elapsedTime += dtMs;
+
+        if (gameState === 'ready') {
+          tier = 'base';
+          currentRate = _getRateForTier('base');
+          _advanceFrame(dtMs);
+          return;
+        }
+
+        // Playing state - handle tier transitions
+        if (jumpTriggeredThisFrame) {
+          lastJumpTimestamps.push(elapsedTime);
+          _pruneJumpTimestamps();
+
+          if (_isRapidJumping()) {
+            // Continuous/rapid jumping → fast switching cycle (instant flip + fast loop)
+            currentFrame = (currentFrame === 'up') ? 'down' : 'up';
+            frameTimer = 0;
+            tier = 'rapid';
+            currentRate = _getRateForTier('rapid');
+            flapPhase = 0;
+          } else {
+            // Single jump → calm two-phase wingbeat (downstroke, then upstroke)
+            tier = 'flap';
+            flapPhase = 1;
+            flapTimer = FLAP_HALF_MS;
+            currentFrame = 'down';
+            frameTimer = 0;
+          }
+        }
+
+        if (tier === 'rapid') {
+          _pruneJumpTimestamps();
+          if (!jumpHeld && !_isRapidJumping()) {
+            tier = 'base';
+            currentRate = _getRateForTier('base');
+          }
+        }
+
+        if (tier === 'flap') {
+          // Drive the wingbeat frames manually; don't run the base loop meanwhile
+          flapTimer -= dtMs;
+          if (flapTimer <= 0) {
+            if (flapPhase === 1) {
+              // Downstroke done → upstroke
+              flapPhase = 2;
+              flapTimer = FLAP_HALF_MS;
+              currentFrame = 'up';
+            } else {
+              // Flap complete → resume base looping
+              flapPhase = 0;
+              tier = 'base';
+              currentRate = _getRateForTier('base');
+              frameTimer = 0;
+            }
+          }
+          return;
+        }
+
+        _advanceFrame(dtMs);
+      }
+
+      function getCurrentFrame() { return currentFrame; }
+
+      function reset() {
+        currentFrame = 'up';
+        frameTimer = 0;
+        tier = 'base';
+        currentRate = (cfg.baseRateMin + cfg.baseRateMax) / 2;
+        jumpBoostTimer = 0;
+        lastJumpTimestamps = [];
+        elapsedTime = 0;
+        flapPhase = 0;
+        flapTimer = 0;
+      }
+
+      function isRapid() { return tier === 'rapid'; }
+
+      return { update, getCurrentFrame, isRapid, reset };
+    }
+
+    // Create the global wing animation controller instance
+    const wingAnimController = createWingAnimController(CONFIG.wingAnimation);
+
+    // ============================================================
+    // TiltCalculator — Inline version of src/TiltCalculator.js
+    // Computes visual rotation angle for Nailong based on vertical velocity.
+    // Tilt is purely visual — collision hitbox remains an axis-aligned circle.
+    // ============================================================
+    function calculateTilt(velocity, config) {
+      if (velocity > 0) {
+        // Descending: clockwise (positive rotation)
+        const t = Math.min(velocity / config.maxDescentVelocity, 1.0);
+        return t * config.maxDownTilt;
+      } else if (velocity < 0) {
+        // Ascending: counter-clockwise (negative rotation)
+        const t = Math.min(-velocity / config.maxAscentVelocity, 1.0);
+        return -t * config.maxUpTilt;
+      }
+      return 0; // Level
+    }
+
+    // ============================================================
+    // drawRoundedRect — Utility for drawing rounded rectangles (pipe caps, etc.)
+    // ============================================================
+    function drawRoundedRect(ctx, x, y, width, height, radius) {
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + width - radius, y);
+      ctx.arcTo(x + width, y, x + width, y + radius, radius);
+      ctx.lineTo(x + width, y + height - radius);
+      ctx.arcTo(x + width, y + height, x + width - radius, y + height, radius);
+      ctx.lineTo(x + radius, y + height);
+      ctx.arcTo(x, y + height, x, y + height - radius, radius);
+      ctx.lineTo(x, y + radius);
+      ctx.arcTo(x, y, x + radius, y, radius);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // ============================================================
+    // renderPipeCaps — Draws darker rounded caps at gap-facing edges of pipes
+    // ============================================================
+    function renderPipeCaps(ctx, pipes, config) {
+      const capOverhang = config.pipes.capOverhang;     // 8px each side
+      const capHeight = config.pipes.capHeight;         // 25px
+      const capRadius = config.pipes.capBorderRadius;   // 4px
+      const capColor = config.pipes.capColor;           // darker green
+
+      ctx.fillStyle = capColor;
+      for (const pipe of pipes) {
+        const topPipeBottom = pipe.gapCenterY - pipe.gapHeight / 2;
+        const botPipeTop = pipe.gapCenterY + pipe.gapHeight / 2;
+        const capX = pipe.x - capOverhang;
+        const capWidth = pipe.width + capOverhang * 2;
+
+        // Top pipe cap (at bottom of top pipe, facing gap)
+        drawRoundedRect(ctx, capX, topPipeBottom - capHeight, capWidth, capHeight, capRadius);
+        // Bottom pipe cap (at top of bottom pipe, facing gap)
+        drawRoundedRect(ctx, capX, botPipeTop, capWidth, capHeight, capRadius);
+      }
+    }
+
+    // ============================================================
+    // Flying Obstacle Manager — Inline spawn/update/removal for flying obstacles
+    // ============================================================
+    const FlyingObstacleManager = (() => {
+      const fCfg = CONFIG.flyingObstacles;
+      const characterHeight = CONFIG.character.spriteHeight;
+      const flyingObsHeight = Math.round(characterHeight * fCfg.heightRatio); // 44px (same height as Nailong)
+      const flyingObsWidth = Math.round(flyingObsHeight * 1.2); // keep enemy proportions (~53px)
+
+      // Object pool for flying obstacles
+      const pool = new ObjectPool(() => ({
+        x: 0, y: 0, width: flyingObsWidth, height: flyingObsHeight, speed: 0, active: false,
+        baseY: 0, bobAmp: 0, bobFreq: 0, bobPhase: 0, bobTimer: 0
+      }));
+      pool.prewarm(fCfg.poolSize);
+
+      /**
+       * Pick a spawn Y (top-left) that will NOT line up with the gap the player is
+       * forced through. The only moment the player is locked to a specific height is
+       * while threading a pipe gap, so we predict which pipe will be at the player's
+       * column when THIS obstacle reaches it (the obstacle is faster than the pipes)
+       * and avoid that pipe's gap band — plus any pipe currently at the player's column.
+       */
+      function pickSafeY(minY, maxY, height, pipes, bobAmp, startX, obstacleSpeed, pipeSpeed) {
+        const ghostR = CONFIG.ghost.hitboxRadius;
+        const playerX = CONFIG.character.startX + CONFIG.character.spriteWidth / 2;
+        const pipeW = CONFIG.pipes.width;
+        const zone = (pipeW + height) / 2 + 70; // X-distance that counts as "the player's pipe"
+
+        // How long until this obstacle reaches the player's column, and how far the
+        // pipes will have scrolled left by then.
+        const timeToPlayer = (obstacleSpeed > 0) ? (startX - playerX) / obstacleSpeed : 0;
+        const pipeShift = pipeSpeed * timeToPlayer;
+
+        // Forbidden gap bands: the pipe predicted to be at the player's column on
+        // arrival, plus any pipe currently overlapping the player's column.
+        const bands = [];
+        for (let p = 0; p < pipes.length; p++) {
+          const pipe = pipes[p];
+          const predictedCenter = (pipe.x - pipeShift) + pipeW / 2;
+          const currentCenter = pipe.x + pipeW / 2;
+          if (Math.abs(predictedCenter - playerX) <= zone || Math.abs(currentCenter - playerX) <= zone) {
+            bands.push([pipe.gapCenterY - pipe.gapHeight / 2, pipe.gapCenterY + pipe.gapHeight / 2]);
+          }
+        }
+
+        function overlapsBand(y) {
+          // Full vertical extent the obstacle can occupy, incl. bob + player clearance
+          const top = y - bobAmp - ghostR;
+          const bot = y + height + bobAmp + ghostR;
+          for (let i = 0; i < bands.length; i++) {
+            if (!(bot < bands[i][0] || top > bands[i][1])) return true;
+          }
+          return false;
+        }
+
+        // Return the first candidate that clears every forbidden band
+        for (let a = 0; a < 24; a++) {
+          const y = minY + Math.random() * (maxY - minY);
+          if (!overlapsBand(y)) return y;
+        }
+
+        // Fallback (rare): the candidate furthest from the nearest forbidden band
+        let best = minY + Math.random() * (maxY - minY);
+        let bestClearance = -Infinity;
+        for (let a = 0; a < 24; a++) {
+          const y = minY + Math.random() * (maxY - minY);
+          const center = y + height / 2;
+          let minClearance = Infinity;
+          for (let i = 0; i < bands.length; i++) {
+            const bandCenter = (bands[i][0] + bands[i][1]) / 2;
+            const d = Math.abs(center - bandCenter);
+            if (d < minClearance) minClearance = d;
+          }
+          if (minClearance > bestClearance) {
+            bestClearance = minClearance;
+            best = y;
+          }
+        }
+        return best;
+      }
+
+      /**
+       * Spawn a flying obstacle if conditions are met.
+       */
+      function spawn(difficulty, score, flyingObstacles, pipes) {
+        if (score < fCfg.activationThreshold) return null;
+        if (flyingObstacles.length >= fCfg.maxOnScreen) return null;
+
+        const obs = pool.acquire();
+        obs.width = flyingObsWidth;
+        obs.height = flyingObsHeight;
+        obs.x = CONFIG.canvas.width + flyingObsWidth;
+
+        // Gentle vertical bobbing for a more natural flight path
+        obs.bobAmp = 8 + Math.random() * 6;       // 8–14px swing
+        obs.bobFreq = 1.5 + Math.random() * 1.5;  // rad/s
+        obs.bobPhase = Math.random() * Math.PI * 2;
+        obs.bobTimer = 0;
+
+        // Speed: pipeSpeed × speedMultiplier (needed before choosing a safe Y)
+        const speedMult = difficulty.flyingObstacleSpeedMultiplier || fCfg.baseSpeedMultiplier;
+        obs.speed = difficulty.pipeSpeed * speedMult;
+
+        // Vertical position: random within 15%–85% of playable height, but never aligned
+        // with the gap the player is forced through when this obstacle reaches them.
+        const playableHeight = CONFIG.canvas.height - CONFIG.canvas.hudHeight;
+        const minY = playableHeight * fCfg.spawnYMinPercent;
+        const maxY = playableHeight * fCfg.spawnYMaxPercent;
+        obs.baseY = pickSafeY(minY, maxY, obs.height, pipes || [], obs.bobAmp, obs.x, obs.speed, difficulty.pipeSpeed);
+        obs.y = obs.baseY;
+
+        obs.active = true;
+        return obs;
+      }
+
+      /**
+       * Update flying obstacles: move, spawn via timer, remove off-screen.
+       */
+      function update(gameState, dt, state, difficulty, score) {
+        const flyingObstacles = gameState.flyingObstacles;
+
+        // No movement or spawning in non-playing states
+        if (state !== 'playing') return;
+
+        // Move all obstacles left, with gentle vertical bobbing
+        for (let i = 0; i < flyingObstacles.length; i++) {
+          const obs = flyingObstacles[i];
+          obs.x -= obs.speed * dt;
+          obs.bobTimer += dt;
+          obs.y = obs.baseY + Math.sin(obs.bobTimer * obs.bobFreq + obs.bobPhase) * obs.bobAmp;
+        }
+
+        // Spawn timer logic (only when score >= threshold)
+        if (score >= fCfg.activationThreshold && difficulty.flyingObstacleSpawnInterval) {
+          gameState.flyingObsSpawnTimer += dt * 1000;
+
+          // Initialize interval if not set
+          if (gameState.flyingObsCurrentInterval <= 0) {
+            const interval = difficulty.flyingObstacleSpawnInterval;
+            gameState.flyingObsCurrentInterval = interval.min + Math.random() * (interval.max - interval.min);
+          }
+
+          // Check if timer expired
+          if (gameState.flyingObsSpawnTimer >= gameState.flyingObsCurrentInterval) {
+            gameState.flyingObsSpawnTimer = 0;
+
+            const newObs = spawn(difficulty, score, flyingObstacles, gameState.pipes);
+            if (newObs) {
+              flyingObstacles.push(newObs);
+            }
+
+            // Reset interval for next spawn
+            const interval = difficulty.flyingObstacleSpawnInterval;
+            gameState.flyingObsCurrentInterval = interval.min + Math.random() * (interval.max - interval.min);
+          }
+        }
+
+        // Remove off-screen obstacles (right edge < 0)
+        let i = flyingObstacles.length;
+        while (i--) {
+          if (flyingObstacles[i].x + flyingObstacles[i].width < 0) {
+            const removed = flyingObstacles.splice(i, 1)[0];
+            removed.active = false;
+            pool.release(removed);
+          }
+        }
+      }
+
+      return { spawn, update, pool };
+    })();
+
+    // ============================================================
+    // renderFlyingObstacles — Draws flying enemy obstacles with image or fallback
+    // ============================================================
+    function renderFlyingObstacles(ctx, obstacles, sprite) {
+      for (const obs of obstacles) {
+        if (sprite) {
+          ctx.drawImage(sprite, obs.x, obs.y, obs.width, obs.height);
+        } else {
+          // Fallback: red circle
+          ctx.fillStyle = '#e74c3c';
+          ctx.beginPath();
+          ctx.arc(obs.x + obs.width / 2, obs.y + obs.height / 2, obs.height / 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
     // Renderer — Orchestrates all drawing in correct z-order with batched operations
     const Renderer = (() => {
-      // Pre-render HUD background to offscreen canvas at init
-      const hudBuffer = document.createElement('canvas');
-      hudBuffer.width = CONFIG.canvas.width;
-      hudBuffer.height = CONFIG.canvas.hudHeight;
-      const hudCtx = hudBuffer.getContext('2d');
-      hudCtx.fillStyle = 'rgba(0,0,0,0.85)';
-      hudCtx.fillRect(0, 0, hudBuffer.width, hudBuffer.height);
+      // Score is shown in a DOM bar below the canvas (matches v1 framed layout)
+      const scoreBarEl = document.getElementById('score-bar');
 
-      // Ghost sprite reference (set after asset load)
+      // Nailong sprite references (set after asset load)
+      let nailongUpSprite = null;
+      let nailongDownSprite = null;
+      // Flying enemy sprite reference (set after asset load)
+      let flyingEnemySprite = null;
+      // Legacy ghost sprite (kept for backward compat, not used if Nailong loads)
       let ghostSprite = null;
       function setGhostSprite(img) { ghostSprite = img; }
+      function setNailongSprites(upImg, downImg) {
+        nailongUpSprite = upImg;
+        nailongDownSprite = downImg;
+      }
+      function setFlyingEnemySprite(img) { flyingEnemySprite = img; }
 
       function draw(ctx, gameState, time) {
         const { ghost, pipes, collectibles, clouds, shake, score, highScore } = gameState;
@@ -1326,6 +1824,9 @@
         }
         ctx.stroke();
 
+        // Pipe caps — drawn after pipe bodies for correct z-order
+        renderPipeCaps(ctx, pipes, CONFIG);
+
         // 6. Collectibles — white rounded rects with oscillation animation
         if (collectibles) {
           ctx.fillStyle = '#ffffff';
@@ -1351,34 +1852,71 @@
           ctx.globalAlpha = 1;
         }
 
-        // 7. Particle trail (ParticleSystem handles batching by opacity)
-        ParticleSystem.render(ctx);
-
-        // 8. Ghost sprite (32x32 from CONFIG, fallback to white circle)
-        if (ghostSprite) {
-          ctx.drawImage(ghostSprite, ghost.x, ghost.y, ghost.width, ghost.height);
-        } else {
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.arc(ghost.x + ghost.width / 2, ghost.y + ghost.height / 2, ghost.width / 2, 0, Math.PI * 2);
-          ctx.fill();
+        // 7. Flying obstacles (after collectibles, before particles)
+        if (gameState.flyingObstacles && gameState.flyingObstacles.length > 0) {
+          renderFlyingObstacles(ctx, gameState.flyingObstacles, flyingEnemySprite);
         }
 
-        // 9. Score popups (ScorePopupManager handles its own rendering)
+        // 8. Particle trail (ParticleSystem handles batching by opacity)
+        ParticleSystem.render(ctx);
+
+        // 9. Nailong sprite — frame-based wing animation with idle bob and death effects
+        const wingFrame = wingAnimController.getCurrentFrame();
+        const nailongSprite = wingFrame === 'up' ? nailongUpSprite : nailongDownSprite;
+
+        // Idle bob during Ready state (±2px, 800ms sine cycle)
+        let drawY = ghost.y;
+        if (gameState.state === 'ready') {
+          drawY = ghost.y + Math.sin((time || 0) * 2.5) * 2;
+        }
+
+        ctx.save();
+        const centerX = ghost.x + ghost.width / 2;
+        const centerY = drawY + ghost.height / 2;
+
+        // Death rotation and opacity fade during game_over
+        if (gameState.state === 'game_over') {
+          ctx.translate(centerX, centerY);
+          // Rotation: 2 rad/s from moment of death
+          const deathElapsed = (time || 0) - (gameState._deathTime || (time || 0));
+          ctx.rotate(deathElapsed * 2);
+          // Opacity fade: 1.0 → 0.4 over 400ms
+          const fadeProgress = Math.min(1, deathElapsed / 0.4);
+          ctx.globalAlpha = 1.0 - fadeProgress * 0.6;
+          if (nailongSprite) {
+            ctx.drawImage(nailongSprite, -ghost.width / 2, -ghost.height / 2, ghost.width, ghost.height);
+          } else {
+            // Fallback: white circle
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(0, 0, ghost.width / 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.globalAlpha = 1;
+        } else {
+          ctx.translate(centerX, centerY);
+          ctx.rotate(ghost.tiltAngle || 0);
+          if (nailongSprite) {
+            ctx.drawImage(nailongSprite, -ghost.width / 2, -ghost.height / 2, ghost.width, ghost.height);
+          } else {
+            // Fallback: white circle if sprites failed to load
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(0, 0, ghost.width / 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+
+        // 10. Score popups (ScorePopupManager handles its own rendering)
         ScorePopupManager.render(ctx);
 
-        // 10. HUD bar — stamp pre-rendered offscreen canvas + draw text
-        ctx.drawImage(hudBuffer, 0, CONFIG.canvas.height - CONFIG.canvas.hudHeight);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '14px monospace';
-        ctx.textAlign = 'left';
-        ctx.fillText(
-          ScoreManager.getHudText(),
-          10,
-          CONFIG.canvas.height - CONFIG.canvas.hudHeight + 26
-        );
+        // 11. HUD score — update the DOM score bar below the canvas
+        if (scoreBarEl) {
+          scoreBarEl.textContent = ScoreManager.getHudText();
+        }
 
-        // 11. Overlay screens (Ready, Paused, GameOver)
+        // 12. Overlay screens (Ready, Paused, GameOver)
         drawOverlay(ctx, gameState.state, time);
 
         // End screen shake transform
@@ -1393,7 +1931,7 @@
           ctx.fillStyle = '#ffffff';
           ctx.font = 'bold 20px monospace';
           ctx.textAlign = 'center';
-          ctx.fillText('FLAPPY KIRO', CONFIG.canvas.width / 2, CONFIG.canvas.height / 3);
+          ctx.fillText('FLAPPY NAILONG', CONFIG.canvas.width / 2, CONFIG.canvas.height / 3);
 
           // Start prompt with pulsing opacity
           ctx.globalAlpha = 0.6 + 0.4 * Math.sin(Date.now() / 500);
@@ -1425,13 +1963,14 @@
           ctx.fillStyle = 'rgba(0,0,0,0.6)';
           ctx.fillRect(0, 0, CONFIG.canvas.width, CONFIG.canvas.height);
 
-          // "GAME OVER" text
-          ctx.fillStyle = '#ffffff';
+          // "GAME OVER" text in red
+          ctx.fillStyle = '#e74c3c';
           ctx.font = 'bold 24px monospace';
           ctx.textAlign = 'center';
           ctx.fillText('GAME OVER', CONFIG.canvas.width / 2, CONFIG.canvas.height / 3);
 
-          // Final score
+          // Final score (white — only the GAME OVER title is colored)
+          ctx.fillStyle = '#ffffff';
           ctx.font = '18px monospace';
           ctx.fillText('Score: ' + ScoreManager.currentScore, CONFIG.canvas.width / 2, CONFIG.canvas.height / 2 - 20);
 
@@ -1453,7 +1992,7 @@
         }
       }
 
-      return { draw, drawOverlay, setGhostSprite };
+      return { draw, drawOverlay, setGhostSprite, setNailongSprites, setFlyingEnemySprite };
     })();
 
     // ============================================================
@@ -1505,19 +2044,48 @@
         }
         PhysicsEngine.update(gameState.ghost, dt, StateManager.currentState);
 
+        // 4.5 Wing animation update (after physics, before scrolling)
+        wingAnimController.update(dt, jump, false, StateManager.currentState);
+
+        // 4.6 Tilt calculation (purely visual, does not affect collision hitbox)
+        // While rapid-jumping, hold a steady ascending (upward) tilt — the per-jump
+        // velocity swings would otherwise flip the tilt back and forth and look glitchy.
+        // Once rapid jumping stops, the normal velocity-based tilt resumes, so it
+        // naturally tilts forward as the character begins to descend.
+        if (wingAnimController.isRapid()) {
+          gameState.ghost.tiltAngle = calculateTilt(CONFIG.physics.terminalVelocityUp, CONFIG.character);
+        } else {
+          gameState.ghost.tiltAngle = calculateTilt(gameState.ghost.velocity, CONFIG.character);
+        }
+
         // 5. Scrolling (move pipes, collectibles; spawn/recycle)
         ScrollingEngine.update(gameState, dt, gameState.difficulty, StateManager.currentState);
         // Clouds update (works in all states except paused)
         ScrollingEngine.updateClouds(gameState.clouds, dt, gameState.difficulty, StateManager.currentState);
+        // Flying obstacles update (spawn, move, remove off-screen)
+        FlyingObstacleManager.update(gameState, dt, StateManager.currentState, gameState.difficulty, ScoreManager.currentScore);
 
         // 6. Collision detection
         if (StateManager.isPlaying()) {
           const collision = CollisionDetector.check(gameState.ghost, gameState.pipes);
           if (collision.collided) {
             StateManager.transition('game_over');
+            gameState._deathTime = performance.now() / 1000; // Track death time for animation
             AudioManager.playGameOver();
             ScreenShake.activate(gameState.shake);
             ScoreManager.onGameOver();
+          }
+
+          // Flying obstacle collision check (after pipe check)
+          if (StateManager.isPlaying() && gameState.flyingObstacles.length > 0) {
+            const flyingCollision = CollisionDetector.checkFlyingObstacles(gameState.ghost, gameState.flyingObstacles);
+            if (flyingCollision.collided) {
+              StateManager.transition('game_over');
+              gameState._deathTime = performance.now() / 1000;
+              AudioManager.playGameOver();
+              ScreenShake.activate(gameState.shake);
+              ScoreManager.onGameOver();
+            }
           }
         }
 
@@ -1567,11 +2135,34 @@
     async function loadAssets() {
       const errors = [];
 
-      // Load ghost sprite
+      // Load Nailong sprites (two-frame wing animation)
+      const nailongUpImg = new Image();
+      const nailongUpPromise = new Promise((resolve) => {
+        nailongUpImg.onload = () => resolve(nailongUpImg);
+        nailongUpImg.onerror = () => { errors.push('Failed to load nailong_up.png'); resolve(null); };
+        nailongUpImg.src = 'assets/nailong_up.png';
+      });
+
+      const nailongDownImg = new Image();
+      const nailongDownPromise = new Promise((resolve) => {
+        nailongDownImg.onload = () => resolve(nailongDownImg);
+        nailongDownImg.onerror = () => { errors.push('Failed to load nailong_down.png'); resolve(null); };
+        nailongDownImg.src = 'assets/nailong_down.png';
+      });
+
+      // Load flying enemy sprite
+      const flyingEnemyImg = new Image();
+      const flyingEnemyPromise = new Promise((resolve) => {
+        flyingEnemyImg.onload = () => resolve(flyingEnemyImg);
+        flyingEnemyImg.onerror = () => { errors.push('Failed to load flying_enemy.png'); resolve(null); };
+        flyingEnemyImg.src = 'assets/flying_enemy.png';
+      });
+
+      // Load legacy ghost sprite as fallback
       const ghostImg = new Image();
-      const ghostPromise = new Promise((resolve, reject) => {
+      const ghostPromise = new Promise((resolve) => {
         ghostImg.onload = () => resolve(ghostImg);
-        ghostImg.onerror = () => reject(new Error('Failed to load ghosty.png'));
+        ghostImg.onerror = () => resolve(null);
         ghostImg.src = 'assets/ghosty.png';
       });
 
@@ -1583,13 +2174,17 @@
       });
 
       try {
-        const [sprite] = await Promise.race([
-          Promise.all([ghostPromise, AudioManager.init()]),
+        const [nailongUp, nailongDown, flyingEnemy, ghost] = await Promise.race([
+          Promise.all([nailongUpPromise, nailongDownPromise, flyingEnemyPromise, ghostPromise, AudioManager.init()]),
           timeout
         ]);
 
-        // Pass sprite to renderer
-        Renderer.setGhostSprite(sprite);
+        // Pass Nailong sprites to renderer
+        Renderer.setNailongSprites(nailongUp, nailongDown);
+        // Flying enemy sprite (null triggers red circle fallback)
+        Renderer.setFlyingEnemySprite(flyingEnemy);
+        // Legacy ghost sprite as additional fallback
+        Renderer.setGhostSprite(ghost);
         return true;
       } catch (err) {
         errors.push(err.message);

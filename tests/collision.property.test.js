@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
 import { circleRectCollision, _clamp, createCollisionDetector, DEFAULT_CONFIG } from '../src/CollisionDetector.js';
 
-const CANVAS_HEIGHT = DEFAULT_CONFIG.canvas.height;   // 640
+const CANVAS_HEIGHT = DEFAULT_CONFIG.canvas.height;   // 500
 const HUD_HEIGHT = DEFAULT_CONFIG.canvas.hudHeight;   // 40
-const FLOOR_Y = CANVAS_HEIGHT - HUD_HEIGHT;           // 600
+const FLOOR_Y = CANVAS_HEIGHT - HUD_HEIGHT;           // 460
 
 /**
  * Property 11: Circle-vs-Rectangle collision detection correctness
@@ -84,7 +84,7 @@ describe('Property 11: Circle-vs-Rectangle collision detection correctness', () 
   });
 
   // --- Sub-property: Floor boundary violation always detected ---
-  it('floor boundary violation always detected (cy + r >= 600)', () => {
+  it('floor boundary violation always detected (cy + r >= 460)', () => {
     const floorViolationArb = fc.record({
       r: fc.float({ min: 1, max: 20, noNaN: true, noDefaultInfinity: true }),
       // cy such that cy + r >= FLOOR_Y (600)

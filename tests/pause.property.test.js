@@ -6,8 +6,8 @@ import { createScrollingEngine } from '../src/ScrollingEngine.js';
 // Helper arbitraries
 const dtArb = fc.float({ min: Math.fround(0.001), max: Math.fround(0.033), noNaN: true, noDefaultInfinity: true });
 const velocityArb = fc.float({ min: Math.fround(-400), max: Math.fround(600), noNaN: true, noDefaultInfinity: true });
-const positionArb = fc.float({ min: Math.fround(0), max: Math.fround(640), noNaN: true, noDefaultInfinity: true });
-const xPositionArb = fc.float({ min: Math.fround(0), max: Math.fround(480), noNaN: true, noDefaultInfinity: true });
+const positionArb = fc.float({ min: Math.fround(0), max: Math.fround(500), noNaN: true, noDefaultInfinity: true });
+const xPositionArb = fc.float({ min: Math.fround(0), max: Math.fround(800), noNaN: true, noDefaultInfinity: true });
 const speedArb = fc.float({ min: Math.fround(60), max: Math.fround(180), noNaN: true, noDefaultInfinity: true });
 
 // Ghost arbitrary

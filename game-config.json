@@ -1,6 +1,6 @@
 {
   "physics": {
-    "gravity": 800,
+    "gravity": 900,
     "gravityUnit": "px/s²",
     "jumpVelocity": -300,
     "jumpVelocityUnit": "px/s",
@@ -21,20 +21,69 @@
     "outlineWidth": 2
   },
   "ghost": {
-    "spriteWidth": 32,
-    "spriteHeight": 32,
-    "hitboxRadius": 12,
-    "startX": 120,
-    "startY": 320
+    "spriteWidth": 44,
+    "spriteHeight": 44,
+    "hitboxRadius": 16,
+    "startX": 150,
+    "startY": 300
+  },
+  "character": {
+    "spriteWidth": 44,
+    "spriteHeight": 44,
+    "hitboxRadius": 16,
+    "startX": 150,
+    "startY": 300,
+    "maxDownTilt": 0.6,
+    "maxUpTilt": 0.4,
+    "maxDescentVelocity": 600,
+    "maxAscentVelocity": 400
+  },
+  "wingAnimation": {
+    "baseRateMin": 250,
+    "baseRateMax": 350,
+    "jumpRateMin": 120,
+    "jumpRateMax": 180,
+    "rapidRateMin": 60,
+    "rapidRateMax": 100,
+    "jumpBoostDuration": 300,
+    "rapidDetectionWindow": 200
   },
   "canvas": {
-    "width": 480,
-    "height": 640,
-    "hudHeight": 40,
+    "width": 800,
+    "height": 600,
+    "hudHeight": 0,
     "targetFps": 60,
     "maxDt": 0.033,
     "maxDtUnit": "seconds",
     "backgroundColor": "#87CEEB"
+  },
+  "pipes": {
+    "width": 60,
+    "gapMinPercent": 0.2,
+    "gapMaxPercent": 0.8,
+    "fillColor": "#2ecc40",
+    "outlineColor": "#1a7a28",
+    "outlineWidth": 2,
+    "capOverhang": 8,
+    "capHeight": 25,
+    "capBorderRadius": 4,
+    "capColor": "#1a7a28"
+  },
+  "flyingObstacles": {
+    "activationThreshold": 30,
+    "maxOnScreen": 2,
+    "baseSpawnIntervalMin": 3000,
+    "baseSpawnIntervalMax": 5000,
+    "minSpawnIntervalMin": 1500,
+    "minSpawnIntervalMax": 2500,
+    "spawnIntervalDecrement": 400,
+    "baseSpeedMultiplier": 1.2,
+    "maxSpeedMultiplier": 2.0,
+    "speedMultiplierIncrement": 0.2,
+    "spawnYMinPercent": 0.15,
+    "spawnYMaxPercent": 0.85,
+    "heightRatio": 1.0,
+    "poolSize": 4
   },
   "difficulty": {
     "baseSpeed": 120,

@@ -3,8 +3,8 @@ import { createScrollingEngine } from './ScrollingEngine.js';
 
 const DEFAULT_CONFIG = {
   canvas: {
-    width: 480,
-    height: 640,
+    width: 800,
+    height: 500,
     hudHeight: 40
   },
   pipes: {
@@ -28,13 +28,27 @@ const DEFAULT_CONFIG = {
     ],
     countPerLayer: [2, 5],
     baseWidth: [60, 120]
+  },
+  flyingObstacles: {
+    activationThreshold: 30,
+    maxOnScreen: 2,
+    spawnYMinPercent: 0.15,
+    spawnYMaxPercent: 0.85,
+    heightRatio: 0.75,
+    poolSize: 4,
+    width: 40
+  },
+  character: {
+    spriteHeight: 44
   }
 };
 
 const DEFAULT_DIFFICULTY = {
   pipeSpeed: 120,
   gapHeight: 140,
-  pipeSpacing: 350
+  pipeSpacing: 350,
+  flyingObstacleSpeedMultiplier: 1.2,
+  flyingObstacleSpawnInterval: { min: 3000, max: 5000 }
 };
 
 describe('ScrollingEngine', () => {
@@ -49,7 +63,7 @@ describe('ScrollingEngine', () => {
   describe('spawnPipePair()', () => {
     it('creates a pipe at the right canvas edge', () => {
       const pipe = engine.spawnPipePair(DEFAULT_DIFFICULTY);
-      expect(pipe.x).toBe(480);
+      expect(pipe.x).toBe(800);
     });
 
     it('sets pipe width from config', () => {
@@ -68,25 +82,25 @@ describe('ScrollingEngine', () => {
     });
 
     it('positions gap center within playable area bounds', () => {
-      const playableHeight = 640 - 40; // 600
-      const minY = playableHeight * 0.2; // 120
-      const maxY = playableHeight * 0.8; // 480
+      const playableHeight = 500 - 40; // 460
+      const minY = playableHeight * 0.2; // 92
+      const maxY = playableHeight * 0.8; // 368
 
-      // With random = 0.5, gapCenterY = 120 + 0.5 * (480 - 120) = 120 + 180 = 300
+      // With random = 0.5, gapCenterY = 92 + 0.5 * (368 - 92) = 92 + 138 = 230
       const pipe = engine.spawnPipePair(DEFAULT_DIFFICULTY);
-      expect(pipe.gapCenterY).toBe(300);
+      expect(pipe.gapCenterY).toBe(230);
     });
 
     it('uses random function to determine gap center', () => {
       // Random = 0 → min Y
       const engineMin = createScrollingEngine(DEFAULT_CONFIG, () => 0);
       const pipeMin = engineMin.spawnPipePair(DEFAULT_DIFFICULTY);
-      expect(pipeMin.gapCenterY).toBe(120); // 600 * 0.2
+      expect(pipeMin.gapCenterY).toBe(92); // 460 * 0.2
 
       // Random = 1 → max Y
       const engineMax = createScrollingEngine(DEFAULT_CONFIG, () => 1);
       const pipeMax = engineMax.spawnPipePair(DEFAULT_DIFFICULTY);
-      expect(pipeMax.gapCenterY).toBe(480); // 600 * 0.8
+      expect(pipeMax.gapCenterY).toBe(368); // 460 * 0.8
     });
 
     it('acquires pipe from pool', () => {
@@ -138,15 +152,15 @@ describe('ScrollingEngine', () => {
     });
 
     it('spawns a new pipe when rightmost pipe is far enough from right edge', () => {
-      // Pipe at x=0, right edge = 60. Distance from canvas right = 480 - 60 = 420 > 350 spacing
+      // Pipe at x=0, right edge = 60. Distance from canvas right = 800 - 60 = 740 > 350 spacing
       gameObjects.pipes.push({ x: 0, width: 60, gapCenterY: 300, gapHeight: 140, scored: false });
       engine.update(gameObjects, 1 / 60, DEFAULT_DIFFICULTY, 'playing');
       expect(gameObjects.pipes.length).toBe(2);
     });
 
     it('does not spawn when rightmost pipe is too close to right edge', () => {
-      // Pipe at x=400, right edge = 460. Distance from canvas right = 480 - 460 = 20 < 350
-      gameObjects.pipes.push({ x: 400, width: 60, gapCenterY: 300, gapHeight: 140, scored: false });
+      // Pipe at x=700, right edge = 760. Distance from canvas right = 800 - 760 = 40 < 350
+      gameObjects.pipes.push({ x: 700, width: 60, gapCenterY: 300, gapHeight: 140, scored: false });
       engine.update(gameObjects, 1 / 60, DEFAULT_DIFFICULTY, 'playing');
       expect(gameObjects.pipes.length).toBe(1);
     });
@@ -228,14 +242,14 @@ describe('ScrollingEngine', () => {
 
     it('spawns cloud off-screen right when not initial spread', () => {
       const cloud = engine.spawnCloud(0, DEFAULT_DIFFICULTY, false);
-      expect(cloud.x).toBeGreaterThanOrEqual(480);
+      expect(cloud.x).toBeGreaterThanOrEqual(800);
     });
 
     it('uses initial spread to distribute across canvas width', () => {
       const cloud = engine.spawnCloud(0, DEFAULT_DIFFICULTY, true);
-      // With random=0.5, x = 0.5 * (480 + width) - width
+      // With random=0.5, x = 0.5 * (800 + width) - width
       // Width depends on baseWidth and scale calculations
-      expect(cloud.x).toBeLessThan(480 + cloud.width);
+      expect(cloud.x).toBeLessThan(800 + cloud.width);
     });
 
     it('sets speed within far layer range (layer 0)', () => {
@@ -284,7 +298,7 @@ describe('ScrollingEngine', () => {
 
     it('positions Y within playable area', () => {
       const cloud = engine.spawnCloud(0, DEFAULT_DIFFICULTY, false);
-      const playableHeight = 640 - 40;
+      const playableHeight = 500 - 40;
       expect(cloud.y).toBeGreaterThanOrEqual(0);
       expect(cloud.y).toBeLessThanOrEqual(playableHeight);
     });
@@ -319,7 +333,7 @@ describe('ScrollingEngine', () => {
       // Not all at x >= canvasWidth
       for (let layer = 0; layer < 3; layer++) {
         for (const cloud of clouds[layer]) {
-          expect(cloud.x).toBeLessThan(480 + cloud.width);
+          expect(cloud.x).toBeLessThan(800 + cloud.width);
         }
       }
     });
@@ -354,7 +368,7 @@ describe('ScrollingEngine', () => {
       const clouds = [[{ x: -60, y: 100, width: 50, height: 25, layer: 0, speed: 24, opacity: 0.2, scale: 0.3 }], [], []];
       engine.updateClouds(clouds, 0, DEFAULT_DIFFICULTY, 'playing');
       // Cloud should be repositioned off-screen right
-      expect(clouds[0][0].x).toBeGreaterThanOrEqual(480);
+      expect(clouds[0][0].x).toBeGreaterThanOrEqual(800);
     });
 
     it('spawns new clouds if layer count falls below minimum', () => {
@@ -379,6 +393,217 @@ describe('ScrollingEngine', () => {
     it('prewarms cloud pool with configured count', () => {
       const freshEngine = createScrollingEngine(DEFAULT_CONFIG, () => 0.5);
       expect(freshEngine.getCloudPool().freeCount).toBe(15);
+    });
+  });
+
+  describe('spawnFlyingObstacle()', () => {
+    it('returns null when score is below activation threshold', () => {
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 29, []);
+      expect(result).toBeNull();
+    });
+
+    it('returns null when score is 0', () => {
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 0, []);
+      expect(result).toBeNull();
+    });
+
+    it('spawns when score equals activation threshold (30)', () => {
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 30, []);
+      expect(result).not.toBeNull();
+    });
+
+    it('spawns when score exceeds activation threshold', () => {
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 50, []);
+      expect(result).not.toBeNull();
+    });
+
+    it('returns null when max on screen (2) is reached', () => {
+      const existing = [
+        { x: 400, y: 100, width: 40, height: 33, speed: 144, active: true },
+        { x: 600, y: 200, width: 40, height: 33, speed: 144, active: true }
+      ];
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 35, existing);
+      expect(result).toBeNull();
+    });
+
+    it('spawns when fewer than max on screen', () => {
+      const existing = [{ x: 400, y: 100, width: 40, height: 33, speed: 144, active: true }];
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 35, existing);
+      expect(result).not.toBeNull();
+    });
+
+    it('positions obstacle at canvas width + obstacle width', () => {
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 35, []);
+      expect(result.x).toBe(800 + 40); // canvasWidth + flyingObsWidth
+    });
+
+    it('sets obstacle width and height from config', () => {
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 35, []);
+      expect(result.width).toBe(40);
+      expect(result.height).toBe(33); // 44 * 0.75 = 33
+    });
+
+    it('sets Y position within 15%–85% of playable height', () => {
+      // random = 0.5: playableHeight = 460, minY = 69, maxY = 391
+      // y = 69 + 0.5 * (391 - 69) = 69 + 161 = 230
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 35, []);
+      expect(result.y).toBe(69 + 0.5 * (391 - 69));
+    });
+
+    it('sets speed as pipeSpeed * speedMultiplier', () => {
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 35, []);
+      expect(result.speed).toBeCloseTo(120 * 1.2, 5); // 144
+    });
+
+    it('marks obstacle as active', () => {
+      const result = engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 35, []);
+      expect(result.active).toBe(true);
+    });
+
+    it('acquires from flying obstacle pool', () => {
+      const pool = engine.getFlyingObstaclePool();
+      const initialFree = pool.freeCount;
+      engine.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 35, []);
+      expect(pool.freeCount).toBe(initialFree - 1);
+    });
+
+    it('uses Y min bound when random returns 0', () => {
+      const engineMin = createScrollingEngine(DEFAULT_CONFIG, () => 0);
+      const result = engineMin.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 35, []);
+      const playableHeight = 500 - 40; // 460
+      const expectedY = playableHeight * 0.15; // 69
+      expect(result.y).toBeCloseTo(expectedY, 5);
+    });
+
+    it('uses Y max bound when random returns 1', () => {
+      const engineMax = createScrollingEngine(DEFAULT_CONFIG, () => 1);
+      const result = engineMax.spawnFlyingObstacle(DEFAULT_DIFFICULTY, 35, []);
+      const playableHeight = 500 - 40; // 460
+      const expectedY = playableHeight * 0.85; // 391
+      expect(result.y).toBeCloseTo(expectedY, 5);
+    });
+  });
+
+  describe('updateFlyingObstacles()', () => {
+    it('moves obstacles left by speed * dt in playing state', () => {
+      const obstacles = [{ x: 500, y: 100, width: 40, height: 33, speed: 144, active: true }];
+      engine.updateFlyingObstacles(obstacles, 0.5, 'playing', DEFAULT_DIFFICULTY, 35);
+      expect(obstacles[0].x).toBeCloseTo(500 - 144 * 0.5, 5);
+    });
+
+    it('moves multiple obstacles independently', () => {
+      const obstacles = [
+        { x: 500, y: 100, width: 40, height: 33, speed: 144, active: true },
+        { x: 700, y: 200, width: 40, height: 33, speed: 200, active: true }
+      ];
+      engine.updateFlyingObstacles(obstacles, 1.0, 'playing', DEFAULT_DIFFICULTY, 35);
+      expect(obstacles[0].x).toBeCloseTo(500 - 144, 5);
+      expect(obstacles[1].x).toBeCloseTo(700 - 200, 5);
+    });
+
+    it('does not move obstacles when paused', () => {
+      const obstacles = [{ x: 500, y: 100, width: 40, height: 33, speed: 144, active: true }];
+      engine.updateFlyingObstacles(obstacles, 0.5, 'paused', DEFAULT_DIFFICULTY, 35);
+      expect(obstacles[0].x).toBe(500);
+    });
+
+    it('does not move obstacles when game_over', () => {
+      const obstacles = [{ x: 500, y: 100, width: 40, height: 33, speed: 144, active: true }];
+      engine.updateFlyingObstacles(obstacles, 0.5, 'game_over', DEFAULT_DIFFICULTY, 35);
+      expect(obstacles[0].x).toBe(500);
+    });
+
+    it('does not move obstacles when ready', () => {
+      const obstacles = [{ x: 500, y: 100, width: 40, height: 33, speed: 144, active: true }];
+      engine.updateFlyingObstacles(obstacles, 0.5, 'ready', DEFAULT_DIFFICULTY, 35);
+      expect(obstacles[0].x).toBe(500);
+    });
+
+    it('does not spawn when score is below threshold', () => {
+      const obstacles = [];
+      // Advance spawn timer well past any interval
+      engine.updateFlyingObstacles(obstacles, 10, 'playing', DEFAULT_DIFFICULTY, 20);
+      expect(obstacles.length).toBe(0);
+    });
+
+    it('spawns obstacle via timer when score >= threshold', () => {
+      const obstacles = [];
+      // Advance time enough to trigger spawn (timer exceeds interval)
+      // With random=0.5: interval = 3000 + 0.5*(5000-3000) = 4000ms
+      // dt=5 seconds = 5000ms which exceeds 4000ms
+      engine.updateFlyingObstacles(obstacles, 5, 'playing', DEFAULT_DIFFICULTY, 35);
+      expect(obstacles.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not spawn when paused even if timer would expire', () => {
+      const obstacles = [];
+      engine.updateFlyingObstacles(obstacles, 10, 'paused', DEFAULT_DIFFICULTY, 35);
+      expect(obstacles.length).toBe(0);
+    });
+  });
+
+  describe('removeFlyingObstacleOffscreen()', () => {
+    it('removes obstacles whose right edge is past x=0', () => {
+      const obstacles = [{ x: -50, y: 100, width: 40, height: 33, speed: 144, active: true }];
+      engine.removeFlyingObstacleOffscreen(obstacles);
+      expect(obstacles.length).toBe(0);
+    });
+
+    it('keeps obstacles whose right edge is still on screen', () => {
+      const obstacles = [{ x: -30, y: 100, width: 40, height: 33, speed: 144, active: true }];
+      engine.removeFlyingObstacleOffscreen(obstacles);
+      expect(obstacles.length).toBe(1);
+    });
+
+    it('returns removed obstacles to pool', () => {
+      const pool = engine.getFlyingObstaclePool();
+      const initialFree = pool.freeCount;
+      const obstacles = [{ x: -50, y: 100, width: 40, height: 33, speed: 144, active: true }];
+      engine.removeFlyingObstacleOffscreen(obstacles);
+      expect(pool.freeCount).toBe(initialFree + 1);
+    });
+
+    it('marks removed obstacles as inactive', () => {
+      const obs = { x: -50, y: 100, width: 40, height: 33, speed: 144, active: true };
+      const obstacles = [obs];
+      engine.removeFlyingObstacleOffscreen(obstacles);
+      expect(obs.active).toBe(false);
+    });
+
+    it('removes only off-screen obstacles, keeps on-screen ones', () => {
+      const obstacles = [
+        { x: -50, y: 100, width: 40, height: 33, speed: 144, active: true },
+        { x: 300, y: 200, width: 40, height: 33, speed: 144, active: true },
+        { x: -45, y: 150, width: 40, height: 33, speed: 144, active: true }
+      ];
+      engine.removeFlyingObstacleOffscreen(obstacles);
+      expect(obstacles.length).toBe(1);
+      expect(obstacles[0].x).toBe(300);
+    });
+
+    it('handles empty array', () => {
+      const obstacles = [];
+      engine.removeFlyingObstacleOffscreen(obstacles);
+      expect(obstacles.length).toBe(0);
+    });
+  });
+
+  describe('flying obstacle pool management', () => {
+    it('prewarms flying obstacle pool with configured count (4)', () => {
+      const freshEngine = createScrollingEngine(DEFAULT_CONFIG, () => 0.5);
+      expect(freshEngine.getFlyingObstaclePool().freeCount).toBe(4);
+    });
+  });
+
+  describe('resetFlyingObstacleTimer()', () => {
+    it('resets timer so next update starts fresh', () => {
+      const obstacles = [];
+      // Advance timer partway
+      engine.updateFlyingObstacles(obstacles, 2, 'playing', DEFAULT_DIFFICULTY, 35);
+      engine.resetFlyingObstacleTimer();
+      // After reset, a small dt should not trigger spawn
+      engine.updateFlyingObstacles(obstacles, 0.1, 'playing', DEFAULT_DIFFICULTY, 35);
+      expect(obstacles.length).toBe(0);
     });
   });
 });

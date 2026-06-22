@@ -2,15 +2,15 @@ import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
 import { createScrollingEngine } from '../src/ScrollingEngine.js';
 
-const CANVAS_WIDTH = 480;
-const CANVAS_HEIGHT = 640;
+const CANVAS_WIDTH = 800;
+const CANVAS_HEIGHT = 500;
 const HUD_HEIGHT = 40;
 const PIPE_WIDTH = 60;
-const PLAYABLE_HEIGHT = CANVAS_HEIGHT - HUD_HEIGHT; // 600
+const PLAYABLE_HEIGHT = CANVAS_HEIGHT - HUD_HEIGHT; // 460
 const GAP_MIN_PERCENT = 0.2;
 const GAP_MAX_PERCENT = 0.8;
-const MIN_GAP_CENTER_Y = PLAYABLE_HEIGHT * GAP_MIN_PERCENT; // 120
-const MAX_GAP_CENTER_Y = PLAYABLE_HEIGHT * GAP_MAX_PERCENT; // 480
+const MIN_GAP_CENTER_Y = PLAYABLE_HEIGHT * GAP_MIN_PERCENT; // 92
+const MAX_GAP_CENTER_Y = PLAYABLE_HEIGHT * GAP_MAX_PERCENT; // 368
 
 const config = {
   canvas: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT, hudHeight: HUD_HEIGHT },

@@ -12,8 +12,8 @@
 export function createScrollingEngine(config, randomFn) {
   const _random = randomFn || Math.random;
 
-  const canvasWidth = (config && config.canvas && config.canvas.width) || 480;
-  const canvasHeight = (config && config.canvas && config.canvas.height) || 640;
+  const canvasWidth = (config && config.canvas && config.canvas.width) || 800;
+  const canvasHeight = (config && config.canvas && config.canvas.height) || 500;
   const hudHeight = (config && config.canvas && config.canvas.hudHeight) || 40;
   const pipeWidth = (config && config.pipes && config.pipes.width) || 60;
   const gapMinPercent = (config && config.pipes && config.pipes.gapMinPercent) || 0.2;
@@ -22,6 +22,18 @@ export function createScrollingEngine(config, randomFn) {
   const poolCollectibles = (config && config.pools && config.pools.collectibles) || 6;
   const poolClouds = (config && config.pools && config.pools.clouds) || 15;
   const baseSpacing = (config && config.difficulty && config.difficulty.baseSpacing) || 350;
+
+  // Flying obstacle config
+  const flyingObsConfig = (config && config.flyingObstacles) || {};
+  const flyingObsActivationThreshold = flyingObsConfig.activationThreshold || 30;
+  const flyingObsMaxOnScreen = flyingObsConfig.maxOnScreen || 2;
+  const flyingObsSpawnYMinPercent = flyingObsConfig.spawnYMinPercent || 0.15;
+  const flyingObsSpawnYMaxPercent = flyingObsConfig.spawnYMaxPercent || 0.85;
+  const flyingObsHeightRatio = flyingObsConfig.heightRatio || 0.75;
+  const flyingObsPoolSize = flyingObsConfig.poolSize || 4;
+  const characterHeight = (config && config.character && config.character.spriteHeight) || 44;
+  const flyingObsHeight = Math.round(characterHeight * flyingObsHeightRatio); // 33px
+  const flyingObsWidth = flyingObsConfig.width || 40; // default width
 
   // Cloud config
   const cloudLayers = (config && config.clouds && config.clouds.layers) || [
@@ -98,6 +110,25 @@ export function createScrollingEngine(config, randomFn) {
 
   const cloudPool = createPool(createCloudObject);
   cloudPool.prewarm(poolClouds);
+
+  // Flying obstacle pool
+  function createFlyingObstacleObject() {
+    return {
+      x: 0,
+      y: 0,
+      width: flyingObsWidth,
+      height: flyingObsHeight,
+      speed: 0,
+      active: false
+    };
+  }
+
+  const flyingObstaclePool = createPool(createFlyingObstacleObject);
+  flyingObstaclePool.prewarm(flyingObsPoolSize);
+
+  // Spawn timer state for flying obstacles
+  let flyingObsSpawnTimer = 0;
+  let flyingObsCurrentInterval = 0;
 
   /**
    * Spawn a new pipe pair at the right edge of the canvas.
@@ -361,6 +392,116 @@ export function createScrollingEngine(config, randomFn) {
     }
   }
 
+  /**
+   * Spawn a flying obstacle if conditions are met.
+   * Only spawns when score >= activation threshold and active count < max on screen.
+   *
+   * @param {object} difficulty - DifficultyParams with flyingObstacleSpeedMultiplier and flyingObstacleSpawnInterval
+   * @param {number} score - Current player score
+   * @param {object[]} flyingObstacles - Current active flying obstacles array
+   * @returns {object|null} FlyingObstacle object or null if not spawning
+   */
+  function spawnFlyingObstacle(difficulty, score, flyingObstacles) {
+    // Only spawn when score >= activation threshold
+    if (score < flyingObsActivationThreshold) return null;
+
+    // Only spawn if under max on screen
+    const activeCount = flyingObstacles ? flyingObstacles.length : 0;
+    if (activeCount >= flyingObsMaxOnScreen) return null;
+
+    const obstacle = flyingObstaclePool.acquire();
+
+    // Position: just off right edge
+    obstacle.x = canvasWidth + flyingObsWidth;
+    obstacle.width = flyingObsWidth;
+    obstacle.height = flyingObsHeight;
+
+    // Vertical position: random between 15%–85% of playable height
+    const playableHeight = canvasHeight - hudHeight;
+    const minY = playableHeight * flyingObsSpawnYMinPercent;
+    const maxY = playableHeight * flyingObsSpawnYMaxPercent;
+    obstacle.y = minY + _random() * (maxY - minY);
+
+    // Speed: pipeSpeed * speedMultiplier
+    const speedMultiplier = difficulty.flyingObstacleSpeedMultiplier || 1.2;
+    obstacle.speed = difficulty.pipeSpeed * speedMultiplier;
+    obstacle.active = true;
+
+    return obstacle;
+  }
+
+  /**
+   * Update flying obstacles: move left, handle spawning via timer.
+   * Freezes when paused. No spawn/move when game_over or ready.
+   *
+   * @param {object[]} flyingObstacles - Array of active flying obstacles
+   * @param {number} dt - Delta time in seconds
+   * @param {string} state - Current game state
+   * @param {object} difficulty - DifficultyParams
+   * @param {number} score - Current score
+   */
+  function updateFlyingObstacles(flyingObstacles, dt, state, difficulty, score) {
+    // No movement or spawning in non-playing states
+    if (state === 'paused' || state === 'game_over' || state === 'ready') return;
+
+    // Move all obstacles left
+    for (let i = 0; i < flyingObstacles.length; i++) {
+      flyingObstacles[i].x -= flyingObstacles[i].speed * dt;
+    }
+
+    // Spawn timer logic (only when score >= threshold)
+    if (score >= flyingObsActivationThreshold && difficulty.flyingObstacleSpawnInterval) {
+      flyingObsSpawnTimer += dt * 1000; // convert to ms
+
+      // Initialize interval if not set
+      if (flyingObsCurrentInterval <= 0) {
+        const interval = difficulty.flyingObstacleSpawnInterval;
+        flyingObsCurrentInterval = interval.min + _random() * (interval.max - interval.min);
+      }
+
+      // Check if timer expired
+      if (flyingObsSpawnTimer >= flyingObsCurrentInterval) {
+        flyingObsSpawnTimer = 0;
+
+        // Spawn new obstacle
+        const newObs = spawnFlyingObstacle(difficulty, score, flyingObstacles);
+        if (newObs) {
+          flyingObstacles.push(newObs);
+        }
+
+        // Reset interval for next spawn
+        const interval = difficulty.flyingObstacleSpawnInterval;
+        flyingObsCurrentInterval = interval.min + _random() * (interval.max - interval.min);
+      }
+    }
+  }
+
+  /**
+   * Remove flying obstacles that have moved completely off-screen left.
+   * Returns them to the pool.
+   *
+   * @param {object[]} flyingObstacles - Array of active flying obstacles
+   */
+  function removeFlyingObstacleOffscreen(flyingObstacles) {
+    let i = flyingObstacles.length;
+    while (i--) {
+      const obs = flyingObstacles[i];
+      if (obs.x + obs.width < 0) {
+        flyingObstacles.splice(i, 1);
+        obs.active = false;
+        flyingObstaclePool.release(obs);
+      }
+    }
+  }
+
+  /**
+   * Reset the flying obstacle spawn timer (e.g., on game restart).
+   */
+  function resetFlyingObstacleTimer() {
+    flyingObsSpawnTimer = 0;
+    flyingObsCurrentInterval = 0;
+  }
+
   return {
     update,
     spawnPipePair,
@@ -369,8 +510,13 @@ export function createScrollingEngine(config, randomFn) {
     spawnCloud,
     initClouds,
     updateClouds,
+    spawnFlyingObstacle,
+    updateFlyingObstacles,
+    removeFlyingObstacleOffscreen,
+    resetFlyingObstacleTimer,
     getPipePool() { return pipePool; },
     getCollectiblePool() { return collectiblePool; },
-    getCloudPool() { return cloudPool; }
+    getCloudPool() { return cloudPool; },
+    getFlyingObstaclePool() { return flyingObstaclePool; }
   };
 }

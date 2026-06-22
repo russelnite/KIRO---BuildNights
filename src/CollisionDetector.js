@@ -4,14 +4,14 @@
 // Default config values (same as CONFIG in index.html)
 const DEFAULT_CONFIG = {
   canvas: {
-    width: 480,
-    height: 640,
+    width: 800,
+    height: 500,
     hudHeight: 40
   },
   ghost: {
-    width: 32,
-    height: 32,
-    hitboxRadius: 12
+    width: 44,
+    height: 44,
+    hitboxRadius: 16
   },
   pipes: {
     width: 60
@@ -113,6 +113,30 @@ export function createCollisionDetector(config = DEFAULT_CONFIG) {
   }
 
   /**
+   * Check collision between the ghost and flying obstacles.
+   * Uses the same circle-vs-rectangle algorithm.
+   * Only checks active obstacles.
+   * @param {object} ghost - Ghost object with x, y, width, height, hitboxRadius
+   * @param {Array} flyingObstacles - Array of FlyingObstacle objects
+   * @returns {{ collided: boolean }}
+   */
+  function checkFlyingObstacles(ghost, flyingObstacles) {
+    const cx = ghost.x + ghost.width / 2;
+    const cy = ghost.y + ghost.height / 2;
+    const r = ghost.hitboxRadius;
+
+    for (let i = 0; i < flyingObstacles.length; i++) {
+      const obs = flyingObstacles[i];
+      if (!obs.active) continue;
+      if (circleRectCollision(cx, cy, r, obs.x, obs.y, obs.width, obs.height)) {
+        return { collided: true };
+      }
+    }
+
+    return { collided: false };
+  }
+
+  /**
    * Check collision between the ghost and collectibles.
    * Uses the same circle-vs-rectangle algorithm.
    * @param {object} ghost - Ghost object with x, y, width, height, hitboxRadius
@@ -136,7 +160,7 @@ export function createCollisionDetector(config = DEFAULT_CONFIG) {
     return collected;
   }
 
-  return { check, checkCollectibles };
+  return { check, checkCollectibles, checkFlyingObstacles };
 }
 
 // Export internals for testing

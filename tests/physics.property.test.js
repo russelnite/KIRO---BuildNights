@@ -6,7 +6,7 @@ const GRAVITY = 800;
 const JUMP_VELOCITY = -300;
 const TERMINAL_VELOCITY_DOWN = 600;
 const TERMINAL_VELOCITY_UP = -400;
-const CANVAS_WIDTH = 480;
+const CANVAS_WIDTH = 800;
 
 const engine = createPhysicsEngine();
 

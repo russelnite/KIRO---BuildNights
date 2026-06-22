@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
 import { createScrollingEngine } from '../src/ScrollingEngine.js';
 
-const CANVAS_WIDTH = 480;
-const CANVAS_HEIGHT = 640;
+const CANVAS_WIDTH = 800;
+const CANVAS_HEIGHT = 500;
 const HUD_HEIGHT = 40;
 const PIPE_WIDTH = 60;
 
