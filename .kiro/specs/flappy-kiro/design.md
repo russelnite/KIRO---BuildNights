@@ -180,16 +180,16 @@ Applies forces and velocity to the Ghost character.
 }
 ```
 
-**Constants (tunable):**
-- `GRAVITY`: 0.5 px/frame² (applied per-frame, scaled by dt)
-- `JUMP_VELOCITY`: -7 px/frame (upward)
-- `TERMINAL_VELOCITY_DOWN`: 10 px/frame
-- `TERMINAL_VELOCITY_UP`: -9 px/frame
+**Constants (tunable, all in per-second units):**
+- `GRAVITY`: 800 px/s² (applied per-frame, scaled by dt in seconds)
+- `JUMP_VELOCITY`: -300 px/s (upward)
+- `TERMINAL_VELOCITY_DOWN`: 600 px/s
+- `TERMINAL_VELOCITY_UP`: -400 px/s
 
 **Algorithm:**
 ```
 if state == Playing:
-    ghost.velocity += GRAVITY * dt
+    ghost.velocity += GRAVITY * dt    // dt in seconds
     ghost.velocity = clamp(ghost.velocity, TERMINAL_VELOCITY_UP, TERMINAL_VELOCITY_DOWN)
     ghost.y += ghost.velocity * dt
 ```
@@ -237,8 +237,7 @@ Uses a hybrid collision model: the Ghost is represented as a circle (matching it
 
 **Ghost Hitbox — Circle:**
 - Center: `(ghost.x + ghost.width / 2, ghost.y + ghost.height / 2)`
-- Radius: `min(ghost.width, ghost.height) / 2 * ghost.hitboxScale`
-- The hitboxScale (0.8) makes the circle smaller than the sprite for forgiving feel
+- Radius: `ghost.hitboxRadius` (12px, configured in CONFIG)
 
 **Pipe Hitbox — Axis-Aligned Rectangle:**
 - Top pipe rect: `{ x: pipe.x, y: 0, width: pipe.width, height: gapCenterY - gapHeight/2 }`
@@ -282,12 +281,12 @@ Adjusts game parameters based on current score.
 }
 ```
 
-**Scaling Formula:**
+**Scaling Formula (all values in px/s for speeds, px for gaps/spacing):**
 ```
 tier = floor(score / 10)
-pipeSpeed = min(BASE_SPEED + tier * SPEED_INCREMENT, MAX_SPEED)
-gapHeight = max(BASE_GAP - tier * GAP_DECREMENT, MIN_GAP)
-pipeSpacing = max(BASE_SPACING - tier * SPACING_DECREMENT, MIN_SPACING)
+pipeSpeed = min(BASE_SPEED + tier * SPEED_INCREMENT, MAX_SPEED)       // 120 + tier*15, cap 280
+gapHeight = max(BASE_GAP - tier * GAP_DECREMENT, MIN_GAP)            // 140 - tier*5, min 90
+pipeSpacing = max(BASE_SPACING - tier * SPACING_DECREMENT, MIN_SPACING) // 350 - tier*15, min 200
 ```
 
 ### 8. ScoreManager
@@ -386,12 +385,12 @@ const gameState = {
   
   // Ghost
   ghost: {
-    x: 160,          // Fixed horizontal position (left third of 480)
+    x: 120,          // Fixed horizontal position (left quarter of 480)
     y: 320,          // Vertical position (center of 640)
-    width: 40,       // Sprite render width
-    height: 40,      // Sprite render height
-    velocity: 0,     // Vertical velocity (positive = down)
-    hitboxScale: 0.8 // Circle radius = min(width, height) / 2 * hitboxScale
+    width: 32,       // Sprite render width
+    height: 32,      // Sprite render height
+    velocity: 0,     // Vertical velocity in px/s (positive = down)
+    hitboxRadius: 12 // Circular collision radius in px
   },
 
   // Pipes
@@ -416,9 +415,9 @@ const gameState = {
 
   // Difficulty
   difficulty: {
-    pipeSpeed: 3,
+    pipeSpeed: 120,
     gapHeight: 140,
-    pipeSpacing: 250
+    pipeSpacing: 350
   },
 
   // Screen shake
@@ -520,31 +519,31 @@ const CONFIG = {
     height: 640,
     hudHeight: 40,
     targetFps: 60,
-    maxDt: 33  // ms, prevents spiral-of-death
+    maxDt: 0.033  // seconds, prevents spiral-of-death
   },
   physics: {
-    gravity: 0.5,
-    jumpVelocity: -7,
-    terminalVelocityDown: 10,
-    terminalVelocityUp: -9
+    gravity: 800,             // px/s²
+    jumpVelocity: -300,       // px/s (negative = up)
+    terminalVelocityDown: 600,// px/s
+    terminalVelocityUp: -400  // px/s
   },
   difficulty: {
-    baseSpeed: 3,
-    speedIncrement: 0.2,
-    maxSpeed: 7,
-    baseGap: 140,
-    gapDecrement: 3,
-    minGap: 90,
-    baseSpacing: 250,
-    spacingDecrement: 7,
-    minSpacing: 165,
+    baseSpeed: 120,           // px/s
+    speedIncrement: 15,       // px/s per tier
+    maxSpeed: 280,            // px/s
+    baseGap: 140,             // px
+    gapDecrement: 5,          // px per tier
+    minGap: 90,               // px
+    baseSpacing: 350,         // px
+    spacingDecrement: 15,     // px per tier
+    minSpacing: 200,          // px
     scoreTierSize: 10
   },
   ghost: {
-    width: 40,
-    height: 40,
-    hitboxScale: 0.8,
-    startX: 160,
+    width: 32,
+    height: 32,
+    hitboxRadius: 12,
+    startX: 120,
     startY: 320
   },
   pipes: {
@@ -767,7 +766,7 @@ And all three values SHALL remain within their defined bounds.
 
 ### Property 17: Paused state freezes all positions and velocities
 
-*For any* game state configuration in the Paused state, after a physics or scrolling update with any delta-time, all ghost positions, ghost velocity, pipe positions, and collectible positions SHALL remain exactly unchanged.
+*For any* game state configuration in the Paused state, after a physics or scrolling update with any delta-time, all ghost positions, ghost velocity, pipe positions, collectible positions, and cloud positions SHALL remain exactly unchanged.
 
 **Validates: Requirements 7.6, 7.9**
 

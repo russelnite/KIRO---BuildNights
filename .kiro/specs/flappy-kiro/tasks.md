@@ -42,9 +42,9 @@ Implement a retro-styled endless side-scrolling browser game as a single HTML5 p
 - [ ] 3. Implement physics engine
   - [ ] 3.1 Implement PhysicsEngine module
     - Create PhysicsEngine with update() and applyJump() methods
-    - Apply gravity (0.5 px/frame²) scaled by delta-time each frame in Playing state
-    - Set velocity to JUMP_VELOCITY (-7) on jump input, overriding current velocity
-    - Clamp velocity between TERMINAL_VELOCITY_UP (-9) and TERMINAL_VELOCITY_DOWN (10)
+    - Apply gravity (800 px/s²) scaled by delta-time (seconds) each frame in Playing state
+    - Set velocity to JUMP_VELOCITY (-300 px/s) on jump input, overriding current velocity
+    - Clamp velocity between TERMINAL_VELOCITY_UP (-400 px/s) and TERMINAL_VELOCITY_DOWN (600 px/s)
     - Update ghost.y by velocity * dt for frame-rate independent movement
     - Do not apply physics in Ready, Paused, or GameOver states
     - _Requirements: 2.1, 2.2, 2.5, 2.6, 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8_
@@ -80,9 +80,9 @@ Implement a retro-styled endless side-scrolling browser game as a single HTML5 p
   - [ ] 5.1 Implement DifficultyManager module
     - Create DifficultyManager with evaluate(score) method
     - Compute tier = floor(score / 10)
-    - Compute pipeSpeed = min(BASE_SPEED + tier * 0.2, MAX_SPEED=7)
-    - Compute gapHeight = max(BASE_GAP - tier * 3, MIN_GAP=90)
-    - Compute pipeSpacing = max(BASE_SPACING - tier * 7, MIN_SPACING=165)
+    - Compute pipeSpeed = min(BASE_SPEED + tier * 15, MAX_SPEED=280) in px/s
+    - Compute gapHeight = max(BASE_GAP - tier * 5, MIN_GAP=90) in px
+    - Compute pipeSpacing = max(BASE_SPACING - tier * 15, MIN_SPACING=200) in px
     - Return DifficultyParams object with all three values
     - _Requirements: 3.7, 3.8, 3.9_
 
