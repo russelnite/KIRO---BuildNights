@@ -28,10 +28,14 @@
       border-radius: 8px;
       overflow: hidden;
       background: #000;
+      max-width: 100vw;
+      max-height: 100vh;
     }
 
     canvas {
       display: block;
+      width: 100%;
+      height: auto;
       image-rendering: pixelated;
       image-rendering: crisp-edges;
     }
@@ -45,10 +49,49 @@
       letter-spacing: 1px;
     }
 
+    /* Pause button — visible only on touch devices */
+    #pause-btn {
+      display: none;
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 36px;
+      height: 36px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 2px solid rgba(255, 255, 255, 0.6);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 14px;
+      cursor: pointer;
+      z-index: 10;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    @media (pointer: coarse) {
+      #pause-btn {
+        display: flex;
+      }
+    }
+
+    /* Mobile portrait: rotate prompt + scale the wrapper to fit */
+    @media (max-aspect-ratio: 4/3) and (max-width: 900px) {
+      #game-wrapper {
+        transform: rotate(90deg);
+        transform-origin: center center;
+        max-width: 100vh;
+        max-height: 100vw;
+      }
+    }
+
   </style>
 </head>
 <body>
   <div id="game-wrapper">
+    <button id="pause-btn" aria-label="Pause">❚❚</button>
     <canvas id="game" width="800" height="600"></canvas>
     <div id="score-bar">Score: 0 | High: 0</div>
   </div>
@@ -346,6 +389,8 @@
     const InputHandler = {
       _jumpFlag: false,
       _pauseFlag: false,
+      _touchHoldInterval: null,
+      _touchHeld: false,
 
       init(canvasEl) {
         // Keyboard input
@@ -365,11 +410,63 @@
           this._jumpFlag = true;
         });
 
-        // Touch input on canvas (jump)
+        // Touch input on canvas (jump + hold-for-rapid)
         canvasEl.addEventListener('touchstart', (e) => {
           e.preventDefault();
           this._jumpFlag = true;
+          this._touchHeld = true;
+          // Small delay (150ms) before rapid-fire kicks in — prevents accidental
+          // rapid jumps when the user just doesn't lift their finger fast enough.
+          if (this._touchHoldInterval) clearInterval(this._touchHoldInterval);
+          this._touchHoldTimeout = setTimeout(() => {
+            if (this._touchHeld) {
+              this._touchHoldInterval = setInterval(() => {
+                if (this._touchHeld) {
+                  this._jumpFlag = true;
+                }
+              }, 80);
+            }
+          }, 150);
         });
+
+        canvasEl.addEventListener('touchend', (e) => {
+          this._touchHeld = false;
+          if (this._touchHoldTimeout) {
+            clearTimeout(this._touchHoldTimeout);
+            this._touchHoldTimeout = null;
+          }
+          if (this._touchHoldInterval) {
+            clearInterval(this._touchHoldInterval);
+            this._touchHoldInterval = null;
+          }
+        });
+
+        canvasEl.addEventListener('touchcancel', (e) => {
+          this._touchHeld = false;
+          if (this._touchHoldTimeout) {
+            clearTimeout(this._touchHoldTimeout);
+            this._touchHoldTimeout = null;
+          }
+          if (this._touchHoldInterval) {
+            clearInterval(this._touchHoldInterval);
+            this._touchHoldInterval = null;
+          }
+        });
+
+        // Pause button (for mobile, doesn't trigger jump)
+        const pauseBtn = document.getElementById('pause-btn');
+        if (pauseBtn) {
+          pauseBtn.addEventListener('touchstart', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            this._pauseFlag = true;
+          });
+          pauseBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            this._pauseFlag = true;
+          });
+        }
       },
 
       pollJump() {
@@ -454,6 +551,7 @@
     // processTransitions — Connects input flags to state machine transitions
     function processTransitions(jumpInput, pauseInput) {
       const state = StateManager.currentState;
+      const pauseBtn = document.getElementById('pause-btn');
 
       if (state === 'ready' && jumpInput) {
         StateManager.transition('playing');
@@ -462,15 +560,18 @@
       else if (state === 'playing' && pauseInput) {
         StateManager.transition('paused');
         AudioManager.pauseMusic();
+        if (pauseBtn) pauseBtn.textContent = '▶';
       }
       else if (state === 'paused' && pauseInput) {
         StateManager.transition('playing');
         AudioManager.resumeMusic();
+        if (pauseBtn) pauseBtn.textContent = '❚❚';
       }
       else if (state === 'game_over' && jumpInput) {
         StateManager.transition('ready');
         _resetGameState();
         AudioManager.stopMusic();
+        if (pauseBtn) pauseBtn.textContent = '❚❚';
       }
       // playing → game_over happens via collision detection, not input
     }
@@ -1827,9 +1928,9 @@
         // Pipe caps — drawn after pipe bodies for correct z-order
         renderPipeCaps(ctx, pipes, CONFIG);
 
-        // 6. Collectibles — white rounded rects with oscillation animation
+        // 6. Collectibles — golden rounded rects with oscillation animation
         if (collectibles) {
-          ctx.fillStyle = '#ffffff';
+          ctx.fillStyle = '#F5C542';
           for (const c of collectibles) {
             if (c.collected) continue;
             ctx.globalAlpha = c.opacity;
