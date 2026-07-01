@@ -2,6 +2,8 @@
 
 A Flappy Bird-inspired browser game featuring Nailong — a custom winged character with responsive wing animation, velocity-based tilt, styled pipes, and flying enemy obstacles at higher difficulty.
 
+[![Live Demo](https://img.shields.io/badge/Live-Demo-FF4655?style=for-the-badge)](https://flapnailong.netlify.app/)
+
 ## Screenshots
 
 ### Start Screen
